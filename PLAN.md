@@ -1,7 +1,11 @@
 # ABAP Dump Triage – MVP Plan
 
 > Source: `AGENTS.md`. Principle: **keep it simple** – build the smallest thing that runs the full loop
-> (dump → xMatters → AI triage → Google Chat → fix → review → TR release), then harden.
+> (dump → xMatters → AI triage → Slack → fix → review → TR release), then harden.
+>
+> **Chat channel:** AGENTS.md allows Google Chat **or** Slack. Google Chat apps require a Business/Enterprise Google
+> Workspace account (not available – personal Gmail only), so the **MVP uses Slack**. All chat access goes through
+> one small `ChatClient` interface, so a Google Chat implementation can be added later without touching the pipeline.
 >
 > **Private values are never written in markdown** (AGENTS.md UPDATE 2). `<PLACEHOLDER>`s refer to keys in the
 > git-ignored `.env` (key list: `.env.example`): `<SAP_DEV_SID>`, `<SAP_CLIENT>`, `<SAP_USER>`, `<ADT_DESTINATION>`
@@ -13,20 +17,24 @@
 ## 1. Architecture (MVP)
 
 ```
- SAP DEV                         xMatters                 GCP (Cloud Run, FastAPI)                     Google Chat
-┌──────────────────────┐  HTTPS  ┌──────────┐  webhook  ┌──────────────────────────────────────┐  Chat API  ┌────────────┐
-│ ZTRIAGE_JOB_MONITOR  │───────▶│ Inbound  │─────────▶│ POST /webhooks/xmatters               │──────────▶│ Triage     │
-│ (scheduled, reads    │         │ HTTP     │  (shared  │   └▶ Alert pipeline (LangGraph)       │            │ space      │
-│  cancelled jobs+dump)│         │ trigger  │   secret) │        persist → classify → post      │            │            │
-└──────────────────────┘         │ + Flow   │           │ POST /chat/events  ◀──────────────────│◀──────────│ user msgs  │
+ SAP DEV                         xMatters                 GCP (Cloud Run, FastAPI)                     Slack
+┌──────────────────────┐  HTTPS  ┌──────────┐  webhook  ┌──────────────────────────────────────┐  Web API   ┌────────────┐
+│ ZTRIAGE_JOB_MONITOR  │───────▶│ Inbound  │─────────▶│ POST /webhooks/xmatters               │──────────▶│ #triage    │
+│ (scheduled, reads    │         │ HTTP     │  (shared  │   └▶ Alert pipeline (LangGraph)       │            │ channel,   │
+│  cancelled jobs+dump)│         │ trigger  │   secret) │        persist → classify → post      │            │ 1 thread   │
+└──────────────────────┘         │ + Flow   │           │ POST /slack/events, /slack/interactions│◀──────────│ per alert  │
           ▲                      └──────────┘           │   └▶ Chat agent (create_agent)        │            │            │
-          │ ADT (HTTP)                                  │        tools: get_alert, request_fix, │            │            │
-          │                                             │               approve, release        │            │            │
-          └─────────────────── SAP ADT MCP ◀────────────│   └▶ Fix sub-agent (create_agent +    │──────────▶│ RCA + test │
-                                                        │        SAP ADT MCP tools)             │            │ doc        │
-                                                        │ Postgres (alerts, status, history)    │            └────────────┘
-                                                        │ LangSmith tracing                     │
-                                                        └──────────────────────────────────────┘
+          │                                             │        tools: get_alert, request_fix, │            │            │
+          │                                             │               approve, reject         │            │            │
+          │                                             │ Cloud SQL Postgres (alerts, status)   │            │            │
+          │                                             │ LangSmith tracing                     │            │            │
+          │                                             └──────────────────▲───────────────────┘            │            │
+          │ ADT (HTTP)                                                     │ Cloud SQL Auth Proxy           │            │
+          │                                  Local workstation ┌───────────┴──────────────────┐  Web API   │ RCA + test │
+          └──────────────────────── SAP ADT MCP ◀──────────────│ Fix worker: fix sub-agent    │──────────▶│ document   │
+                                                               │ (create_agent + ADT MCP),    │            └────────────┘
+                                                               │ TR release (Z_TRIAGE_TR_RELEASE)│
+                                                               └──────────────────────────────┘
 ```
 
 ### How xMatters triggers the AI (answer to step 2)
@@ -42,13 +50,13 @@ Use **both, each where it fits** – `create_agent` (LangChain v1) is itself bui
 
 | Part | Choice | Why |
 |---|---|---|
-| Alert pipeline (receive → store → classify → post to Chat) | **LangGraph `StateGraph`** (small, linear) | Must be deterministic: fixed steps, LLM used only for one structured-output node (category/RCA/fix). Chat post is a plain node, not an LLM tool call. |
-| Conversational agent in Google Chat | **`create_agent`** | Simple tool-calling loop over the DB (get alert, list alerts, request fix, approve, release). |
+| Alert pipeline (receive → store → classify → post to Slack) | **LangGraph `StateGraph`** (small, linear) | Must be deterministic: fixed steps, LLM used only for one structured-output node (category/RCA/fix). Slack post is a plain node, not an LLM tool call. |
+| Conversational agent in Slack | **`create_agent`** | Simple tool-calling loop over the DB (get alert, list alerts, request fix, approve, release). |
 | Fix sub-agent | **`create_agent`** + SAP ADT MCP tools (`langchain-mcp-adapters`) | Open-ended tool use (read/edit/check/activate ABAP). |
 | Approval / TR release | **Deterministic code gated by DB status** | Release must never be an LLM decision; the tool refuses unless status = `APPROVED` by a human. |
 
 A full custom multi-agent LangGraph (supervisor, interrupts, etc.) is **not needed for the MVP**. Human approval is
-modelled as DB status transitions driven by Chat messages/buttons, which is simpler than graph `interrupt()` across
+modelled as DB status transitions driven by Slack messages/buttons, which is simpler than graph `interrupt()` across
 days-long waits.
 
 ### Alert status lifecycle (persistent DB)
@@ -59,18 +67,20 @@ days-long waits.
 ```
 ABAP/                      # copies of every ABAP object created in SAP
 app/
-  main.py                  # FastAPI: /webhooks/xmatters, /chat/events, /health
+  main.py                  # FastAPI: /webhooks/xmatters, /slack/events, /slack/interactions, /health
   config.py
   db/ (models.py, repo.py) # SQLAlchemy; Postgres in GCP, SQLite for local tests
   pipeline/alert_graph.py  # LangGraph StateGraph
   agents/chat_agent.py     # create_agent + DB tools
   agents/fix_agent.py      # create_agent + SAP ADT MCP tools
-  chat/client.py           # Google Chat API wrapper (send, thread reply, cards)
+  chat/base.py             # ChatClient interface: post_alert, reply_in_thread, upload_file
+  chat/slack.py            # Slack implementation (slack_bolt + slack_sdk, Block Kit)
+  chat/fake.py             # in-memory client for tests / local runs
   reports/test_doc.py      # builds RCA + before/after test document
 worker/                    # local fix worker (runs on the workstation with sap-adt MCP, polls Cloud SQL)
 infra/terraform/           # ALL GCP services/resources (AGENTS.md UPDATE 1)
 tests/
-docs/ (xmatters-contract.md, google-chat-setup.md, runbook.md)
+docs/ (xmatters-contract.md, slack-setup.md, slack-app-manifest.yaml, runbook.md)
 ```
 
 ---
@@ -89,7 +99,8 @@ docs/ (xmatters-contract.md, google-chat-setup.md, runbook.md)
 - [ ] `terraform apply` (Cloud SQL, Secret Manager, Artifact Registry, Cloud Run).
 - [x] LangSmith API key + project set in `.env` (`LANGSMITH_*`) – not yet validated with a trace.
 - [x] `.env` has `OPENROUTER_API_KEY` and `MODEL`; `.env` is git-ignored.
-- [ ] OpenRouter smoke test: the `MODEL` does tool calling + structured output.
+- [x] OpenRouter smoke test (`scripts/smoke_openrouter.py`): plain, tool calling and structured output OK.
+      `json_schema` mode classified correctly where `function_calling` did not → default `json_schema`.
 - [x] Network path to SAP: resolved by running the fix worker locally with the `sap-adt` MCP (see Risk 3) – no VPC/VPN needed.
 
 **Success:** ADT read works from this workstation; GCP project exists; `terraform plan` is clean after apply
@@ -151,39 +162,53 @@ TMS/Basis process. Needs `S_TRANSPRT` authorization for release (standard develo
 
 ---
 
-## 4. Phase 2 – Google Chat Integration (TODO list)
+## 4. Phase 2 – Slack Integration (TODO list)
 
-**Sending + receiving** requires a **Google Chat app** (an incoming webhook can only send, not receive).
+A **Slack app with a bot user** both sends (Web API) and receives (Events API + Interactivity) – works on the
+free Slack plan with any account. Library: `slack_bolt` (FastAPI adapter) – it verifies request signatures,
+acks within 3 s and handles Slack retries. Google Chat stays possible later behind the same `ChatClient` interface.
 
-GCP-side items (1–2) are done **in Terraform** (`infra/terraform`). Items 3–5 are Chat app settings that have no
-Terraform/API support – set once in the Console and documented in `docs/google-chat-setup.md`.
+Slack app settings have no Terraform provider in scope, so they are created **once from an app manifest**
+(`docs/slack-app-manifest.yaml`, committed, no secrets) and documented in `docs/slack-setup.md`.
+The two Slack secrets are stored in Secret Manager (containers created by **Terraform**, values added by hand).
 
-- [ ] 1. **Terraform:** enable **Google Chat API** (`google_project_service`) – already in `main.tf`.
-- [ ] 2. **Terraform:** Cloud Run runtime **service account** posts messages via Chat API (scope `https://www.googleapis.com/auth/chat.bot`) using its attached identity – no key file. Already in `main.tf`.
-- [ ] 3. *(Console, manual)* Configure the Chat app (APIs & Services → Google Chat API → Configuration): name, avatar, description; enable "Receive 1:1 messages" + "Join spaces and group conversations".
-- [ ] 4. *(Console, manual)* Connection settings: **HTTP endpoint URL** = `https://<cloud-run-url>/chat/events`; authentication audience = endpoint URL (or project number).
-- [ ] 5. *(Console, manual)* Visibility: restrict to the support team / Google group (Workspace admin may need to allow the app).
-- [ ] 6. Create the **special Chat space** (e.g. "ABAP Triage"), add the app; record the space id `spaces/XXXX` in config.
-- [ ] 7. FastAPI `/chat/events`: verify the Google-signed bearer JWT (issuer `chat@system.gserviceaccount.com`), handle `MESSAGE`, `ADDED_TO_SPACE`, `CARD_CLICKED`; reply synchronously if < 30 s, otherwise ack and reply async via Chat API.
-- [ ] 8. Outbound: `spaces.messages.create` – one **thread per alert** (`thread.threadKey = alert_id`) so conversation per alert stays together; card with category, RCA, recommendation and buttons (`Ask`, `Fix it`, `Approve`, `Reject`).
-- [ ] 9. Map chat thread → `alert_id` so free-text questions in a thread resolve the alert automatically.
-- [ ] 10. Workspace admin approval if the domain restricts third-party/internal Chat apps.
+**User (manual, ~10 min):**
+- [ ] 1. Slack workspace (existing, or a new free one) where you can install apps.
+- [ ] 2. api.slack.com/apps → *Create New App* → *From a manifest* → paste `docs/slack-app-manifest.yaml`.
+- [ ] 3. *Install to Workspace*; copy **Bot User OAuth Token** (`xoxb-…`) and **Signing Secret** (Basic Information) into `.env`
+       (`SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`).
+- [ ] 4. Create the triage channel (e.g. private `#abap-triage`), `/invite` the bot; copy the **channel ID** (`C…`) into `.env` (`SLACK_CHANNEL_ID`).
+- [ ] 5. *(Optional, local dev before Cloud Run exists)* App-level token with `connections:write` (`xapp-…`) → `.env` `SLACK_APP_TOKEN`
+       to run in **Socket Mode** (no public URL needed).
+- [ ] 6. After `terraform apply`: set Event Subscriptions + Interactivity Request URLs to the Cloud Run URL (manifest placeholders), Slack verifies them.
+
+**Me (code + Terraform):**
+- [ ] 7. **Terraform:** Secret Manager secrets `slack-bot-token`, `slack-signing-secret` + Cloud Run env `SLACK_CHANNEL_ID`.
+- [ ] 8. `ChatClient` interface + `SlackChatClient` (`chat.postMessage` with Block Kit; replies with `thread_ts`;
+       file upload via `files.getUploadURLExternal` / `files.completeUploadExternal`) + `FakeChatClient` for tests.
+- [ ] 9. One **thread per alert**: parent message = alert card (category, RCA, recommendation, buttons
+       `Fix it` / `Approve` / `Reject`); store `channel` + `ts` on the alert → thread ↔ `alert_id` mapping.
+- [ ] 10. `POST /slack/events`: `app_mention` and thread `message` events → chat agent; ignore bot's own messages; dedupe `event_id` (Slack retries).
+- [ ] 11. `POST /slack/interactions`: button clicks (`block_actions`) carry `alert_id` → status transitions; ack < 3 s, work async.
 
 ### Phase 2 success checklist
-- [ ] `POST /chat/events` rejects requests without a valid Google token (401).
-- [ ] App can be added to the triage space; "hello" in the space gets a reply.
-- [ ] Backend can post a card to the space via Chat API (script `python -m app.chat.client --test`).
-- [ ] Reply into an existing thread by `threadKey` lands in the same thread.
-- [ ] Button click (`CARD_CLICKED`) reaches the backend with the alert id.
-- [ ] Async reply works for slow (> 30 s) operations.
+*Status 2026-11-18: local end-to-end in Socket Mode passed. HTTP-mode items are re-checked after the Cloud Run deploy.*
+- [x] Requests with a wrong signature or a timestamp older than 5 min are rejected (401) – unit test, HTTP mode.
+- [x] Slack Request URL verification (`url_verification` challenge) succeeds – unit test, HTTP mode.
+- [x] Bot token valid (`auth.test` OK).
+- [x] Backend posts an alert card to the channel (`python -m app.chat.slack --test` + 3 real cards from the pipeline).
+- [x] Reply with `thread_ts` lands in the same thread; mentioning the bot in that thread reaches the backend with the right `alert_id`.
+- [x] Button click (*Fix it*) reaches the backend with the `alert_id` → `FIX_REQUESTED`, actor = Slack user, reply in thread (Socket Mode; `/slack/interactions` in HTTP mode after deploy).
+- [ ] Slack retry of the same event (`X-Slack-Retry-Num`) is processed only once.
+- [ ] File upload (test document) appears in the alert thread.
 
 ---
 
 ## 5. Phase 3 – Agentic AI (LangGraph + FastAPI)
 
-### 3.1 Alert pipeline (LangGraph) – xMatters → DB → Google Chat
-Nodes: `validate → persist(NEW) → classify → persist(TRIAGED) → post_to_chat → persist(chat thread id)`.
-Chat post is deterministic code; if classification fails, still post the raw alert with "classification unavailable".
+### 3.1 Alert pipeline (LangGraph) – xMatters → DB → Slack
+Nodes: `validate → persist(NEW) → classify → persist(TRIAGED) → post_to_chat → persist(Slack channel + thread ts)`.
+The Slack post is deterministic code (`ChatClient`); if classification fails, still post the raw alert with "classification unavailable".
 
 ### 3.2 Classification + RCA + recommendation
 `classify` node = one LLM call with **structured output**:
@@ -195,43 +220,60 @@ Optionally the node reads the source around the dump line via ADT to improve RCA
 
 ### 3.3 Chat with the agent
 `create_agent` with tools: `get_alert(id)`, `list_open_alerts()`, `get_alert_history(id)`, `request_fix(id, program, variant)`,
-`approve_fix(id)`, `reject_fix(id, reason)`, `release_tr(id)`. Conversation memory per Chat thread (LangGraph checkpointer, Postgres).
-`request_fix` only allowed if category = DEVELOPER; asks for program + variant if missing.
+`approve_fix(id)`, `reject_fix(id, reason)`. Conversation memory per Slack thread (LangGraph checkpointer, Postgres;
+thread id = `channel:thread_ts`). Triggered by mentioning the bot in an alert thread; the thread resolves the `alert_id`.
+`request_fix` only allowed if category = DEVELOPER; asks for program + variant if missing (defaults from the alert).
+The same actions are available as buttons on the alert card (`Fix it`, `Approve`, `Reject`).
 
 ### 3.4 Fix sub-agent (SAP ADT)
-Runs as a background task; status `FIX_IN_PROGRESS`.
-1. Reproduce **before**: run `ZTRIAGE_RUN` with program + variant → capture dump/output.
+Runs in the **local fix worker** (picks up `FIX_REQUESTED` from Cloud SQL); status `FIX_IN_PROGRESS`.
+1. Reproduce **before**: run `ZCL_TRIAGE_RUNNER->run_job( program, variant )` through an ABAP Unit test method
+   (only way to execute code via ADT) → capture status, dump, job log, spool.
 2. Read source (`abap_object_read_file`), locate faulty line, create/assign TR (`abap_transport_create_request`).
 3. Edit (`abap_object_edit_file`), syntax check (`abap_object_check`), activate (`abap_object_activate`), ATC (`abap_atc_run_*`).
 4. Reproduce **after** with the same variant → must succeed.
 5. Produce **test document** (Markdown → PDF/HTML) containing: alert summary, RCA, code diff (`abap_transport_get_unified_diff`),
    before/after outputs rendered as images ("screenshots"), ATC result, TR number.
-6. Post to the alert's Chat thread with the document link (GCS signed URL); status `FIX_READY`; copy changed source to `ABAP/`.
+6. Upload the test document (PDF/HTML) **directly into the alert's Slack thread** (no GCS bucket needed) with RCA +
+   summary of the change; status `FIX_READY`; copy changed source to `ABAP/`.
 Guardrails: only objects in allowed packages (`Z*`/`ZTRIAGE`), max N edit iterations, never release TR itself.
 
 ### 3.5 Review, approval, TR release
-Any member of the triage space clicks **Approve** (or says "approve") → status `APPROVED` (user id recorded) → `release_tr`
-releases the TR → status `RELEASED` → message in thread "TR <number> released – ready for import to <UAT_SID>".
+Any member of the triage channel clicks **Approve** (or tells the bot "approve") → status `APPROVED` (Slack user id
+recorded) → the local fix worker picks it up and calls `Z_TRIAGE_TR_RELEASE` → status `RELEASED` → message in the thread
+"TR <number> released – ready for import to <UAT_SID>".
 **Reject** → `REJECTED` (optionally re-trigger fix with feedback).
 
 Release goes through the RFC-enabled wrapper `Z_TRIAGE_TR_RELEASE` (Phase 1.4), called by the local fix worker.
 The import into `<UAT_SID>` is **not** done by the agent; it follows the normal TMS/Basis import process.
 
 ### Phase 3 success checklist
-- [ ] Unit tests (pytest) for DB repo, status transitions (illegal transitions rejected), payload validation, idempotency.
-- [ ] `POST /webhooks/xmatters` with a sample payload → row in DB, status `TRIAGED`, card in Chat space within 60 s.
-- [ ] Same payload posted twice → one alert, one Chat message.
-- [ ] Bad token → 401; malformed payload → 422; LLM down → raw alert still posted.
-- [ ] Classification eval: the 3 demo dumps + ~10 synthetic payloads → correct category ≥ 90 %; results tracked as a LangSmith dataset.
-- [ ] In Chat thread: "what is the root cause?" → answer grounded in stored alert data; "list open alerts" works.
-- [ ] "Fix it" on a Functional/Basis alert is refused with an explanation.
-- [ ] "Fix it" on `ZBUG_DIV0` → sub-agent fixes `ZTRIAGE_DEMO_BUG` in DEV, before = dump, after = success, ATC clean,
-      test doc + RCA + diff posted to the thread, status `FIX_READY`, TR number recorded.
+*Status 2026-11-18: 3.1 + 3.2 built (`app/`), 40 unit tests + 3 live tests pass (`uv run pytest`, `uv run pytest -m live`).*
+- [x] Unit tests (pytest) for DB repo, status transitions (illegal transitions rejected), payload validation, idempotency.
+- [x] `POST /webhooks/xmatters` with a sample payload → row in DB, status `TRIAGED`, card in the Slack channel in 1–3 s
+      (local end-to-end: 3 alerts, correct categories, *Fix it* only on the Developer card; duplicate → `200`, not re-posted).
+- [x] Same payload posted twice → one alert, one chat message, classifier called once (`200 duplicate`).
+- [x] Bad / missing / unconfigured token → 401; malformed payload → 422; LLM down → rule-based result, card marked
+      "rule-based"; chat down → alert stays `TRIAGED` in DB.
+- [x] Live classification of the 3 demo dumps: DEVELOPER / FUNCTIONAL / BASIS all correct (confidence 0.99).
+- [ ] Classification eval with ~10 more synthetic payloads (≥ 90 %), tracked as a LangSmith dataset.
+- [x] In the alert's Slack thread: "@bot what is the root cause?" → answer grounded in stored alert data; "list open alerts" works
+      (3.3 chat agent `app/agents/chat_agent.py`; 11 unit tests + 4 live tests).
+- [x] "Fix it" on a Functional/Basis alert is refused with an explanation (button and chat).
+- [x] Chat agent never approves on its own: "what changed?" on a `FIX_READY` alert leaves it `FIX_READY` (live test).
+- [x] Conversation memory per Slack thread (checkpointer, `thread_id = <channel>:<thread_ts>`); other threads don't see it.
+- [x] Agent/LLM failure → deterministic status answer instead of silence.
+- [x] 3.4 fix worker built (`app/fix/`): ADT MCP gateway (Python → local Eclipse MCP, read-only smoke test OK),
+      reproduce via ABAP Unit helper `ZCL_TRIAGE_EVIDENCE` (`$TMP`), guarded fix agent (only the alert's Z/Y program,
+      worker-chosen TR, ≤5 edits, activate only after clean check), source diff, ATC, LLM RCA, HTML report + PNG
+      before/after "screenshots"; 11 offline tests (happy path, no-repro, not activated, fix not helping, standard program).
+- [ ] **Live:** "Fix it" on `ZBUG_DIV0` → sub-agent fixes `ZTRIAGE_DEMO_BUG` in DEV, before = dump, after = success, ATC clean,
+      test doc + RCA + diff posted to the thread, status `FIX_READY`, TR number recorded. *(needs OK: changes SAP DEV)*
 - [ ] `release_tr` before approval is refused; after **Approve** the TR is released (visible in SE09) and status `RELEASED`.
 - [ ] If release fails (e.g. object locked, ATC block), status stays `APPROVED` and the error is posted to the thread.
 - [ ] Every step visible as a trace in LangSmith; every status change in `alert_events`.
-- [ ] Any GCP resource added in Phase 3 (e.g. GCS bucket for test documents + signed-URL IAM) is in Terraform; `terraform plan` shows no changes after apply.
-- [ ] **End-to-end test:** schedule `ZBUG_DIV0` job → monitor → xMatters → Chat card → fix → approve → TR released, with no manual step other than the Chat actions.
+- [ ] Any GCP resource added in Phase 3 is in Terraform; `terraform plan` shows no changes after apply.
+- [ ] **End-to-end test:** schedule `ZBUG_DIV0` job → monitor → xMatters → Slack card → fix → approve → TR released, with no manual step other than the Slack actions.
 
 ---
 
@@ -243,7 +285,7 @@ The import into `<UAT_SID>` is **not** done by the agent; it follows the normal 
    Real GUI screenshots (SAP GUI scripting / Playwright on Fiori) = later phase.
 3. **Network GCP → SAP DEV** – the fix sub-agent needs ADT access to on-prem SAP (VPN / Interconnect / SAP Cloud Connector / a VM in the corporate network).
    **Decision:** the fix worker (fix sub-agent + TR release) runs on the workstation that has the `sap-adt` MCP.
-   It polls Cloud SQL (via Cloud SQL Auth Proxy) for `FIX_REQUESTED` alerts and posts results to Chat itself.
+   It polls Cloud SQL (via Cloud SQL Auth Proxy) for `FIX_REQUESTED` / `APPROVED` alerts and posts results to Slack itself.
    Cloud Run only hosts the webhooks, alert pipeline and chat agent.
 4. **SAP → xMatters outbound** – needs firewall/proxy opening and SSL certificate in STRUST.
 5. **Cloud Run background work** – use min-instances = 1 + "CPU always allocated", or Cloud Tasks for the fix job (fix runs can take minutes).
@@ -262,23 +304,31 @@ The import into `<UAT_SID>` is **not** done by the agent; it follows the normal 
 2. **Database: Cloud SQL Postgres** (SQLite only for local unit tests). Also used for the LangGraph checkpointer.
 3. **Release TR only** – the agent releases the TR after approval; import into `<UAT_SID>` follows the normal TMS/Basis process (changed 2026-11-18, was "release + import").
 4. **Package: `<SAP_PACKAGE>`** for all `ZTRIAGE*` objects.
-5. **Approval: anyone in the triage Chat space** for now (approver's Chat user id is still recorded on the alert).
+5. **Approval: anyone in the triage Slack channel** for now (approver's Slack user id is still recorded on the alert).
 
 6. **TR:** create a new workbench TR in `<SAP_PACKAGE>` for the Phase 1 objects.
-7. **UAT target system: `<UAT_SID>`** – shown in the Chat message after release; the import itself is not automated.
+7. **UAT target system: `<UAT_SID>`** – shown in the Slack message after release; the import itself is not automated.
 8. **SM59 destination `ZTRIAGE_XMATTERS`** is already maintained (xMatters URL + auth) – `ZTRIAGE_JOB_MONITOR` uses it as-is.
 9. **Terraform for all GCP services** (AGENTS.md UPDATE 1). Code in `infra/terraform`, state in `gs://<TF_STATE_BUCKET>`.
    Every new GCP need in later phases (APIs, IAM, buckets e.g. for test documents, Cloud Run settings/env vars)
    is added to Terraform, not created with `gcloud`/Console. Only exceptions: the state bucket (bootstrap),
-   secret *values* (kept out of state), and Chat app Console settings (no API). Container image builds/deploys
+   secret *values* (kept out of state), and the Slack app (created from the manifest in Slack's UI). Container image builds/deploys
    (`gcloud run deploy` / Cloud Build) update the image only; Terraform ignores image changes.
    Project `<GCP_PROJECT_ID>`, region `asia-southeast1`. Project id and state bucket live only in git-ignored
    `terraform.tfvars` / `backend.hcl` (committed: `*.example`).
+   Cost control: `paused = true` stops Cloud SQL and removes the always-on Cloud Run instance (data/URL/tokens kept);
+   `terraform destroy` for the end of the project. `sql_instance_suffix` (`abap-triage-pg-<suffix>`) lets the DB be
+   recreated right after a destroy (deleted Cloud SQL names are blocked ~1 week). See `infra/terraform/README.md`.
 10. **No private information in markdown files** (AGENTS.md UPDATE 2) – TR numbers, GCP project id, SAP system id /
     client / user, package, bucket names, URLs with keys. Use `<PLACEHOLDER>`s (legend at the top); real values only
     in git-ignored files (`.env`, `terraform.tfvars`, `backend.hcl`). Sample payloads are anonymised.
     Also applies to committed code where avoidable (e.g. no hard-coded TR numbers in ABAP tests).
+11. **Chat channel: Slack for the MVP** (AGENTS.md now allows "google chat/slack"; Google Chat apps need a
+    Business/Enterprise Workspace account, which isn't available). Slack app from manifest, bot in one triage channel,
+    one thread per alert. Code talks to a `ChatClient` interface so Google Chat can be added later.
+    Slack secrets: `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` (Secret Manager), `SLACK_CHANNEL_ID` (plain env);
+    optional `SLACK_APP_TOKEN` for Socket Mode during local development.
 
 ## 8. Build order
-Phase 0 → 1.1 → 1.3 → 1.2 (test against xMatters via `ZTRIAGE_XMATTERS`) → 1.4 → 3.1 with a fake Chat client → Phase 2 → 3.2 → 3.3 → 3.4 → 3.5 → E2E.
-(Phase 3.1 can be built before Phase 2 by stubbing the Chat client; Phase 2 then just swaps in the real one.)
+Phase 0 → 1.1 → 1.3 → 1.2 (test against xMatters via `ZTRIAGE_XMATTERS`) → 1.4 → 3.1 + 3.2 with `FakeChatClient` → Phase 2 (Slack) → 3.3 → 3.4 → 3.5 → E2E.
+(Phase 3.1 can be built before Phase 2 by using the fake chat client; Phase 2 then just swaps in `SlackChatClient`.)

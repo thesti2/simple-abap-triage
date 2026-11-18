@@ -1,0 +1,209 @@
+"""Local fix worker (runs on the workstation with Eclipse + ADT MCP).
+
+  uv run python -m app.fix.worker                # poll for FIX_REQUESTED alerts
+  uv run python -m app.fix.worker --once <id>    # process one alert and exit
+
+Deterministic flow; the LLM is used only for the code change (fix agent) and the RCA text.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from app.chat.base import ChatClient, ThreadRef
+from app.chat.slack_blocks import approval_blocks
+from app.db import Alert, Repository
+from app.fix.adt import AdtGateway
+from app.fix.evidence import EVIDENCE_CLASS, Evidence, parse_unit_output, render_test_include
+from app.fix.fix_agent import FixSession, run_fix_agent
+from app.fix.release import prepare_include
+from app.fix.report import FixReport, build_report, unified_diff
+from app.status import Status
+
+log = logging.getLogger("fix_worker")
+ROOT = Path(__file__).resolve().parents[2]
+REPORT_DIR = ROOT / "reports"
+
+
+class FixWorker:
+    def __init__(self, repo: Repository, adt: AdtGateway, llm: BaseChatModel, chat: ChatClient,
+                 report_dir: Path = REPORT_DIR, abap_copy_dir: Path | None = ROOT / "ABAP",
+                 activation_wait_s: float = 45, stale_retries: int = 3, max_attempts: int = 2) -> None:
+        self.repo, self.adt, self.llm, self.chat = repo, adt, llm, chat
+        self.report_dir, self.abap_copy_dir = report_dir, abap_copy_dir
+        self.activation_wait_s, self.stale_retries, self.max_attempts = activation_wait_s, stale_retries, max_attempts
+
+    # ---------------------------------------------------------------- helpers
+    def _ref(self, a: Alert) -> ThreadRef | None:
+        return ThreadRef(a.chat_channel, a.chat_thread) if a.chat_channel and a.chat_thread else None
+
+    def _say(self, a: Alert, text: str, blocks: list[dict[str, Any]] | None = None) -> None:
+        if ref := self._ref(a):
+            self.chat.reply(ref, text, blocks)
+
+    def _refresh_card(self, alert_id: str) -> None:
+        a = self.repo.get(alert_id)
+        if (ref := self._ref(a)) and hasattr(self.chat, "update_alert"):
+            self.chat.update_alert(ref, a.to_dict())
+
+    async def reproduce(self, program: str, variant: str) -> Evidence:
+        """Run program+variant as a background job via the ABAP Unit evidence class."""
+        await prepare_include(self.adt, render_test_include(program, variant))
+        return parse_unit_output(program, variant, await self.adt.run_unit_tests(EVIDENCE_CLASS))
+
+    async def reproduce_after_activation(self, program: str, variant: str, before: Evidence) -> Evidence:
+        """Run the 'after' reproduce. With several application servers a background job can still pick up the old
+        program load for a while after activation, so wait first and retry while the dump points at the old code."""
+        await asyncio.sleep(self.activation_wait_s)
+        after = await self.reproduce(program, variant)
+        for _ in range(self.stale_retries):
+            stale = (not after.ok and after.dump.get("runtime_error")
+                     and after.dump.get("runtime_error") == before.dump.get("runtime_error")
+                     and after.dump.get("line") == before.dump.get("line"))
+            if not stale:
+                break
+            log.info("after-run looks like the old program load (same dump + line) - waiting and retrying")
+            await asyncio.sleep(self.activation_wait_s)
+            after = await self.reproduce(program, variant)
+        return after
+
+    async def choose_transport(self, program: str, alert_id: str, previous: str | None = None) -> str:
+        """Reuse the alert's fix TR on a retry; if the object is locked in a TR SAP forces that one;
+        otherwise create a new TR."""
+        _, trs = await self.adt.transports_for(program)
+        numbers = [t["transportRequestNumber"] for t in trs]
+        if len(numbers) == 1:
+            return numbers[0]
+        if previous and previous in numbers:
+            return previous
+        return await self.adt.create_transport(program, f"Triage fix {program} ({alert_id[-20:]})")
+
+    def write_rca(self, alert: dict[str, Any], before: Evidence, after: Evidence, diff: str, notes: str) -> FixReport:
+        prompt = (f"Alert: {json.dumps({k: alert.get(k) for k in ('alert_id', 'program', 'variant', 'runtime_error', 'error_message', 'root_cause')})}\n"
+                  f"Before fix: status {before.label}, dump {before.dump}, job log {before.joblog}\n"
+                  f"After fix: status {after.label}, job log {after.joblog}, list output {after.spool[:20]}\n"
+                  f"Code diff:\n{diff}\nFix agent notes: {notes}")
+        structured = self.llm.with_structured_output(FixReport, method="json_schema")
+        return structured.invoke([SystemMessage("Write the RCA section of a fix test document for an SAP ABAP bug "
+                                                "fix. Use only the facts given. Be specific and short."),
+                                  HumanMessage(prompt)], config={"run_name": "fix_rca"})
+
+    # ---------------------------------------------------------------- main flow
+    async def process(self, alert_id: str) -> str:
+        a = self.repo.transition(alert_id, Status.FIX_IN_PROGRESS, actor="fix-worker", note="fix agent started")
+        self._refresh_card(alert_id)
+        program, variant = (a.program or "").upper(), (a.variant or "").upper()
+        try:
+            if not program.startswith(("Z", "Y")):
+                raise RuntimeError(f"{program} is not a custom (Z/Y) program")
+            self._say(a, f":robot_face: Fix agent started: reproducing `{program}` / `{variant}` in DEV…")
+
+            before = await self.reproduce(program, variant)
+            if before.ok:
+                raise RuntimeError(f"could not reproduce the error - `{program}` / `{variant}` finished normally")
+
+            transport = await self.choose_transport(program, alert_id, previous=a.fix_tr)
+            self.repo.update_fields(alert_id, fix_tr=transport)
+            source_before = await self.adt.read_source(program)
+
+            p = a.payload or {}
+            allowed = {program} | {x.upper() for x in (p.get("error_program"), p.get("error_include"))
+                                   if x and x.upper().startswith(("Z", "Y"))}
+            session = FixSession(allowed=allowed, transport=transport)
+            task = (f"Alert {alert_id}: job {a.job_name} cancelled.\n"
+                    f"Program {program}, variant {variant}. Runtime error {a.runtime_error or '-'} "
+                    f"in {p.get('error_program') or program} include {p.get('error_include') or '-'} "
+                    f"line {p.get('error_line') or '?'}. Error message: {a.error_message or '-'}\n"
+                    f"Triage root cause: {a.root_cause}\nTriage recommendation: {a.recommendation}\n"
+                    f"Reproduce run (before): {before.label}; dump {before.dump}; job log {before.joblog}\n"
+                    f"Objects you may change: {sorted(allowed)}.")
+            notes, after = "", before
+            for attempt in range(1, self.max_attempts + 1):
+                notes = await run_fix_agent(self.llm, self.adt, session, task, metadata={"alert_id": alert_id,
+                                                                                          "attempt": attempt})
+                if not session.edits or not session.activated:
+                    raise RuntimeError(f"fix agent did not produce an activated change. Notes: {notes[:300]}")
+                after = await self.reproduce_after_activation(program, variant, before)
+                if after.ok:
+                    break
+                self._say(a, f":repeat: Attempt {attempt}: the job still ends *{after.label}* - "
+                             f"{'giving the agent the result for another try' if attempt < self.max_attempts else 'stopping'}.")
+                task = (f"Your change was activated but the reproduce run still ends {after.label}.\n"
+                        f"Job log after your change: {after.joblog}\nDump: {after.dump}\n"
+                        f"Re-read the source and correct your change (same rules). Original task:\n{task}")
+                session.activated = session.checked_clean = False
+            source_after = await self.adt.read_source(program)
+            diff = unified_diff(program, source_before, source_after)
+            atc = await self.adt.atc(program)
+            atc_summary = str(atc.get("summaryInformation") or "no findings").replace("\n", "; ")
+            rca = self.write_rca(a.to_dict(), before, after, diff, notes)
+            files = build_report(self.report_dir, a.to_dict(), before, after, diff, rca, transport, atc_summary, notes)
+            self._copy_source(program, source_after)
+
+            if (ref := self._ref(a)) is not None:
+                for f, title in ((files.before_png, "Before fix"), (files.after_png, "After fix"),
+                                 (files.html, "Fix test document")):
+                    self.chat.upload_file(ref, f, title)
+
+            if not after.ok:
+                raise RuntimeError(f"after the change the job still ends {after.label} "
+                                   f"({after.dump.get('runtime_error') or 'see job log'}) - change left in {transport}")
+
+            self.repo.transition(alert_id, Status.FIX_READY, actor="fix-worker", note=f"fix ready in {transport}")
+            self._refresh_card(alert_id)
+            text = (f":white_check_mark: *Fix ready for review* - TR `{transport}` (not released)\n"
+                    f"*Root cause:* {rca.root_cause}\n*Change:* {rca.change_summary}\n*Test:* {rca.test_summary}\n"
+                    f"*Please check:* {rca.risk_notes}\nATC: {atc_summary}")
+            self._say(a, text, approval_blocks(alert_id, text))
+            return Status.FIX_READY
+        except Exception as e:  # noqa: BLE001 - report every failure in the thread
+            log.exception("fix failed for %s", alert_id)
+            self.repo.transition(alert_id, Status.FIX_FAILED, actor="fix-worker", note=str(e)[:500])
+            self._refresh_card(alert_id)
+            self._say(self.repo.get(alert_id), f":x: *Fix failed:* {e}\nYou can ask me to try again with "
+                                                f"`@abap-triage please fix it`.")
+            return Status.FIX_FAILED
+
+    def _copy_source(self, program: str, source: str) -> None:
+        if self.abap_copy_dir is None:
+            return
+        target = self.abap_copy_dir / f"{program.lower()}.prog.abap"
+        if target.exists():  # only keep copies of objects we track in the repo
+            target.write_text(source if source.endswith("\n") else source + "\n", encoding="utf-8")
+
+    async def run_forever(self, interval_s: int = 15) -> None:
+        log.info("fix worker polling every %ss", interval_s)
+        while True:
+            for a in self.repo.list_alerts(statuses=[Status.FIX_REQUESTED], limit=5):
+                log.info("processing %s", a.alert_id)
+                await self.process(a.alert_id)
+            await asyncio.sleep(interval_s)
+
+
+def _build() -> FixWorker:
+    import os
+
+    from app.chat.slack import SlackChatClient
+    from app.config import get_settings
+    from app.llm import get_llm
+
+    s = get_settings()
+    adt = AdtGateway(os.environ["SAP_ADT_MCP_URL"], os.environ["SAP_ADT_MCP_AUTH"], os.environ["SAP_ADT_DESTINATION"])
+    return FixWorker(Repository(s.database_url), adt, get_llm(s), SlackChatClient(s.slack_bot_token, s.slack_channel_id))
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--once", metavar="ALERT_ID")
+    args = ap.parse_args()
+    w = _build()
+    asyncio.run(w.process(args.once) if args.once else w.run_forever())

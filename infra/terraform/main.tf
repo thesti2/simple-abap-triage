@@ -5,15 +5,16 @@ locals {
     "secretmanager.googleapis.com",
     "artifactregistry.googleapis.com",
     "cloudbuild.googleapis.com",
-    "chat.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
   ]
 
   # Secrets whose values are added by hand (kept out of Terraform state).
   manual_secrets = {
-    OPENROUTER_API_KEY = "openrouter-api-key"
-    LANGSMITH_API_KEY  = "langsmith-api-key"
+    OPENROUTER_API_KEY   = "openrouter-api-key"
+    LANGSMITH_API_KEY    = "langsmith-api-key"
+    SLACK_BOT_TOKEN      = "slack-bot-token"
+    SLACK_SIGNING_SECRET = "slack-signing-secret"
   }
 }
 
@@ -53,13 +54,14 @@ resource "google_artifact_registry_repository" "app" {
 
 # ---------------------------------------------------------------- Cloud SQL (Postgres)
 resource "google_sql_database_instance" "pg" {
-  name             = "${var.name_prefix}-pg"
+  name             = "${var.name_prefix}-pg-${var.sql_instance_suffix}"
   database_version = "POSTGRES_16"
   region           = var.region
 
   settings {
     edition           = "ENTERPRISE"
     tier              = var.db_tier
+    activation_policy = var.paused ? "NEVER" : "ALWAYS" # NEVER = instance stopped, storage kept
     availability_type = "ZONAL"
     disk_size         = 10
     disk_type         = "PD_SSD"
@@ -168,7 +170,7 @@ resource "google_cloud_run_v2_service" "app" {
     service_account = google_service_account.run.email
 
     scaling {
-      min_instance_count = 1 # keep background triage alive
+      min_instance_count = var.paused ? 0 : 1 # 1 = always-on (Slack/background work); 0 while paused
       max_instance_count = 2
     }
 
@@ -212,6 +214,10 @@ resource "google_cloud_run_v2_service" "app" {
         value = var.langsmith_project
       }
       env {
+        name  = "SLACK_CHANNEL_ID"
+        value = var.slack_channel_id
+      }
+      env {
         name  = "DB_NAME"
         value = google_sql_database.triage.name
       }
@@ -247,8 +253,8 @@ resource "google_cloud_run_v2_service" "app" {
   depends_on = [google_secret_manager_secret_iam_member.run_access]
 }
 
-# Public endpoint: xMatters and Google Chat must reach it. The app itself checks
-# X-Triage-Token (xMatters) and the Google-signed bearer token (Chat).
+# Public endpoint: xMatters and Slack must reach it. The app itself checks
+# X-Triage-Token (xMatters) and the Slack request signature (signing secret).
 resource "google_cloud_run_v2_service_iam_member" "public" {
   count    = var.enable_cloud_run ? 1 : 0
   name     = google_cloud_run_v2_service.app[0].name

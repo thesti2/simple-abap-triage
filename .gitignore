@@ -231,3 +231,11 @@ crash.log
 # Private Terraform inputs (examples are committed)
 infra/terraform/terraform.tfvars
 infra/terraform/backend.hcl
+
+# Local SQLite database
+triage.db
+triage_chat.db
+*.db-journal
+
+# Generated fix test documents (may contain system details)
+reports/

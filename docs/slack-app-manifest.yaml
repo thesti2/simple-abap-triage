@@ -1,0 +1,33 @@
+# Slack app manifest for the ABAP Triage bot.
+# Create: https://api.slack.com/apps -> Create New App -> From a manifest -> pick workspace -> paste this file.
+#
+# Starts in SOCKET MODE (no public URL needed) so the bot works for local development before Cloud Run exists.
+# After the backend runs on Cloud Run, switch to HTTP mode (see docs/slack-setup.md, "Switch to HTTP mode").
+display_information:
+  name: ABAP Triage
+  description: Triage of cancelled SAP jobs - classification, RCA, fix and TR release approval
+  background_color: "#1d3557"
+features:
+  bot_user:
+    display_name: abap-triage
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read   # "@abap-triage ..." questions in alert threads
+      - chat:write          # post alert cards and replies
+      - channels:history    # read thread replies in a public triage channel
+      - groups:history      # read thread replies in a private triage channel
+      - files:write         # upload the test document (before/after, RCA)
+      - users:read          # show the approver's name
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.channels
+      - message.groups
+  interactivity:
+    is_enabled: true        # buttons: Fix it / Approve / Reject
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

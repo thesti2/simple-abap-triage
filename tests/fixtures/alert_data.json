@@ -1,0 +1,18 @@
+{
+  "alert_id": "XYZ-100-ZTRIAGE_TEST_DATA-22240201",
+  "source": "SAP", "system": "XYZ", "client": "100",
+  "job_name": "ZTRIAGE_TEST_DATA", "job_count": "22240201", "job_status": "CANCELLED",
+  "job_user": "JOBUSER", "scheduled_by": "JOBUSER",
+  "start_time": "2026-11-18T22:24:02", "end_time": "2026-11-18T22:24:02", "timezone": "UTC+8",
+  "program": "ZTRIAGE_DEMO_BUG", "variant": "ZBUG_DATA",
+  "error_type": "MESSAGE", "runtime_error": "",
+  "error_program": "", "error_include": "", "error_line": "",
+  "error_message": "Material ZTRIAGE_NO_MAT does not exist in material master (MARA)",
+  "joblog_text": "",
+  "joblog": [
+    "2026-11-18 22:24:02 S 00516 Job started",
+    "2026-11-18 22:24:02 S 00550 Step 001 started (program ZTRIAGE_DEMO_BUG, variant ZBUG_DATA, user ID JOBUSER)",
+    "2026-11-18 22:24:02 E 00001 Material ZTRIAGE_NO_MAT does not exist in material master (MARA)",
+    "2026-11-18 22:24:02 A 00564 Job canceled after system exception ERROR_MESSAGE"
+  ]
+}

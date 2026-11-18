@@ -1,5 +1,5 @@
 output "cloud_run_url" {
-  description = "Base URL. xMatters webhook = <url>/webhooks/xmatters, Chat endpoint = <url>/chat/events."
+  description = "Base URL. xMatters webhook = <url>/webhooks/xmatters; Slack = <url>/slack/events and <url>/slack/interactions."
   value       = var.enable_cloud_run ? google_cloud_run_v2_service.app[0].uri : null
 }
 

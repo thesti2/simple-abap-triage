@@ -1,0 +1,18 @@
+{
+  "alert_id": "XYZ-100-ZTRIAGE_TEST_DIV0-22245801",
+  "source": "SAP", "system": "XYZ", "client": "100",
+  "job_name": "ZTRIAGE_TEST_DIV0", "job_count": "22245801", "job_status": "CANCELLED",
+  "job_user": "JOBUSER", "scheduled_by": "JOBUSER",
+  "start_time": "2026-11-18T22:24:58", "end_time": "2026-11-18T22:24:59", "timezone": "UTC+8",
+  "program": "ZTRIAGE_DEMO_BUG", "variant": "ZBUG_DIV0",
+  "error_type": "DUMP", "runtime_error": "COMPUTE_INT_ZERODIVIDE",
+  "error_program": "ZTRIAGE_DEMO_BUG", "error_include": "ZTRIAGE_DEMO_BUG", "error_line": "55",
+  "error_message": "Internal session terminated with a runtime error COMPUTE_INT_ZERODIVIDE (see ST22)",
+  "joblog_text": "",
+  "joblog": [
+    "2026-11-18 22:24:58 S 00516 Job started",
+    "2026-11-18 22:24:59 S 00550 Step 001 started (program ZTRIAGE_DEMO_BUG, variant ZBUG_DIV0, user ID JOBUSER)",
+    "2026-11-18 22:24:59 A 00671 Internal session terminated with a runtime error COMPUTE_INT_ZERODIVIDE (see ST22)",
+    "2026-11-18 22:24:59 A 00518 Job canceled"
+  ]
+}
