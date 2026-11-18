@@ -42,3 +42,8 @@ Let me know as well, based on the description above, if we require a langgraph o
 
 # TODO
 Review the task and make a plan (PLAN.md) based on the phases and make a checklist of the success condition on each phases. For each phases, do a thorough testing to ensure the functionality
+
+
+# UPDATE
+1. Terraform is expected to be used to build or activate services in GCP
+2. Do not store private information (TR number, GCP project id, etc) in any of the markdown file (README, etc)

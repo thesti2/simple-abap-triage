@@ -1,0 +1,5 @@
+# Non-secret settings only. Secrets go to Secret Manager (README step 4).
+project_id       = "<GCP_PROJECT_ID>"
+region           = "asia-southeast1"
+model            = "<MODEL from .env>"
+enable_cloud_run = false

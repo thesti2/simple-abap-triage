@@ -221,3 +221,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfplan
+
+# Private Terraform inputs (examples are committed)
+infra/terraform/terraform.tfvars
+infra/terraform/backend.hcl
