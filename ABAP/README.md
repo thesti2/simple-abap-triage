@@ -33,5 +33,7 @@ Details of each test are reported as *tolerable* messages (hidden when the run p
 ## Job monitor notes
 - Sent jobs are remembered in cluster table `INDX` (`RELID ZT`, `ID ZTRIAGE_SENT`), 30 days, so each job is sent once;
   failed sends are retried on the next run.
+- Unit tests `ltc_dedup` check both (second run sends nothing; wrong destination → retried next run) using test
+  seams `sent_store` (separate INDX key `ZTRIAGE_SENT_UT`) and `http_send` (injected HTTP 202) - nothing reaches xMatters.
 - Jobs `ZTRIAGE_RUN_*` (fix-agent reproduce runs) and `ZTRIAGE_JOB_MONITOR` itself are never reported.
 - Payload contract: `docs/xmatters-contract.md`.

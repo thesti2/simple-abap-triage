@@ -1,0 +1,161 @@
+[
+  {
+    "id": "dev_itab_line_not_found",
+    "expected": "DEVELOPER",
+    "alert": {
+      "job_name": "ZMM_STOCK_REPORT_DAILY", "program": "ZMM_STOCK_REPORT", "variant": "DAILY",
+      "error_type": "DUMP", "runtime_error": "ITAB_LINE_NOT_FOUND",
+      "error_program": "ZMM_STOCK_REPORT", "error_include": "ZMM_STOCK_REPORT_F01", "error_line": "212",
+      "error_message": "Internal session terminated with a runtime error ITAB_LINE_NOT_FOUND (see ST22)",
+      "joblog": [
+        "S 00516 Job started",
+        "S 00550 Step 001 started (program ZMM_STOCK_REPORT, variant DAILY, user ID JOBUSER)",
+        "A 00671 Internal session terminated with a runtime error ITAB_LINE_NOT_FOUND (see ST22)",
+        "A 00518 Job canceled"
+      ]
+    }
+  },
+  {
+    "id": "dev_objref_not_assigned",
+    "expected": "DEVELOPER",
+    "alert": {
+      "job_name": "ZSD_ORDER_INTERFACE", "program": "ZSD_ORDER_INTERFACE", "variant": "OUTBOUND",
+      "error_type": "DUMP", "runtime_error": "OBJECTS_OBJREF_NOT_ASSIGNED",
+      "error_program": "ZCL_SD_ORDER_MAPPER============CP", "error_include": "ZCL_SD_ORDER_MAPPER============CM003",
+      "error_line": "48",
+      "error_message": "Internal session terminated with a runtime error OBJECTS_OBJREF_NOT_ASSIGNED (see ST22)",
+      "joblog": [
+        "S 00516 Job started",
+        "S 00550 Step 001 started (program ZSD_ORDER_INTERFACE, variant OUTBOUND, user ID JOBUSER)",
+        "I ZSD 010 1.250 orders selected",
+        "A 00671 Internal session terminated with a runtime error OBJECTS_OBJREF_NOT_ASSIGNED (see ST22)",
+        "A 00518 Job canceled"
+      ]
+    }
+  },
+  {
+    "id": "dev_uncaught_duplicate_key",
+    "expected": "DEVELOPER",
+    "alert": {
+      "job_name": "ZPP_CONFIRMATION_UPLOAD", "program": "ZPP_CONFIRMATION_UPLOAD", "variant": "PLANT_A",
+      "error_type": "DUMP", "runtime_error": "UNCAUGHT_EXCEPTION",
+      "error_program": "ZPP_CONFIRMATION_UPLOAD", "error_include": "ZPP_CONFIRMATION_UPLOAD", "error_line": "133",
+      "error_message": "An exception of class CX_SY_ITAB_DUPLICATE_KEY was raised and not caught (INSERT into sorted table with unique key)",
+      "joblog": [
+        "S 00516 Job started",
+        "S 00550 Step 001 started (program ZPP_CONFIRMATION_UPLOAD, variant PLANT_A, user ID JOBUSER)",
+        "A 00671 Internal session terminated with a runtime error UNCAUGHT_EXCEPTION (see ST22)",
+        "A 00518 Job canceled"
+      ]
+    }
+  },
+  {
+    "id": "dev_getwa_not_assigned",
+    "expected": "DEVELOPER",
+    "alert": {
+      "job_name": "ZFI_OPEN_ITEMS_EXTRACT", "program": "ZFI_OPEN_ITEMS_EXTRACT", "variant": "MONTHLY",
+      "error_type": "DUMP", "runtime_error": "GETWA_NOT_ASSIGNED",
+      "error_program": "ZFI_OPEN_ITEMS_EXTRACT", "error_include": "ZFI_OPEN_ITEMS_EXTRACT", "error_line": "87",
+      "error_message": "Internal session terminated with a runtime error GETWA_NOT_ASSIGNED (see ST22)",
+      "joblog": [
+        "S 00516 Job started",
+        "S 00550 Step 001 started (program ZFI_OPEN_ITEMS_EXTRACT, variant MONTHLY, user ID JOBUSER)",
+        "A 00671 Internal session terminated with a runtime error GETWA_NOT_ASSIGNED (see ST22)",
+        "A 00518 Job canceled"
+      ]
+    }
+  },
+  {
+    "id": "func_period_not_open",
+    "expected": "FUNCTIONAL",
+    "alert": {
+      "job_name": "ZFI_ACCRUAL_POSTING", "program": "ZFI_ACCRUAL_POSTING", "variant": "MONTH_END",
+      "error_type": "MESSAGE", "runtime_error": "",
+      "error_message": "Posting period 011 2026 is not open for account type S",
+      "joblog": [
+        "S 00516 Job started",
+        "S 00550 Step 001 started (program ZFI_ACCRUAL_POSTING, variant MONTH_END, user ID JOBUSER)",
+        "E F5 201 Posting period 011 2026 is not open for account type S",
+        "A 00564 Job canceled after system exception ERROR_MESSAGE"
+      ]
+    }
+  },
+  {
+    "id": "func_customer_blocked",
+    "expected": "FUNCTIONAL",
+    "alert": {
+      "job_name": "SD_BILLING_DUE_LIST", "program": "SDBILLDL", "variant": "DAILY_BILL",
+      "error_type": "MESSAGE", "runtime_error": "",
+      "error_message": "Customer 0000012345 is blocked for billing (central billing block)",
+      "joblog": [
+        "S 00516 Job started",
+        "S 00550 Step 001 started (program SDBILLDL, variant DAILY_BILL, user ID JOBUSER)",
+        "E VF 018 Customer 0000012345 is blocked for billing (central billing block)",
+        "A 00564 Job canceled after system exception ERROR_MESSAGE"
+      ]
+    }
+  },
+  {
+    "id": "func_missing_condition",
+    "expected": "FUNCTIONAL",
+    "alert": {
+      "job_name": "ZSD_PRICE_SIMULATION", "program": "ZSD_PRICE_SIMULATION", "variant": "ALL_MAT",
+      "error_type": "MESSAGE", "runtime_error": "",
+      "error_message": "No valid price condition PR00 found for material MAT-4711 in sales org 1000",
+      "joblog": [
+        "S 00516 Job started",
+        "S 00550 Step 001 started (program ZSD_PRICE_SIMULATION, variant ALL_MAT, user ID JOBUSER)",
+        "E ZSD 042 No valid price condition PR00 found for material MAT-4711 in sales org 1000",
+        "A 00564 Job canceled after system exception ERROR_MESSAGE"
+      ]
+    }
+  },
+  {
+    "id": "basis_memory_in_custom",
+    "expected": "BASIS",
+    "alert": {
+      "job_name": "ZMM_MRP_ARCHIVE", "program": "ZMM_MRP_ARCHIVE", "variant": "FULL",
+      "error_type": "DUMP", "runtime_error": "TSV_TNEW_PAGE_ALLOC_FAILED",
+      "error_program": "ZMM_MRP_ARCHIVE", "error_include": "ZMM_MRP_ARCHIVE", "error_line": "61",
+      "error_message": "No more storage space available for extending an internal table (TSV_TNEW_PAGE_ALLOC_FAILED)",
+      "joblog": [
+        "S 00516 Job started",
+        "S 00550 Step 001 started (program ZMM_MRP_ARCHIVE, variant FULL, user ID JOBUSER)",
+        "A 00671 Internal session terminated with a runtime error TSV_TNEW_PAGE_ALLOC_FAILED (see ST22)",
+        "A 00518 Job canceled"
+      ]
+    }
+  },
+  {
+    "id": "basis_db_error",
+    "expected": "BASIS",
+    "alert": {
+      "job_name": "ZCO_COST_SNAPSHOT", "program": "ZCO_COST_SNAPSHOT", "variant": "WEEKLY",
+      "error_type": "DUMP", "runtime_error": "DBSQL_SQL_ERROR",
+      "error_program": "ZCO_COST_SNAPSHOT", "error_include": "ZCO_COST_SNAPSHOT", "error_line": "140",
+      "error_message": "SQL error 4 when accessing table ZCO_SNAPSHOT: cannot allocate enough memory / log volume full",
+      "joblog": [
+        "S 00516 Job started",
+        "S 00550 Step 001 started (program ZCO_COST_SNAPSHOT, variant WEEKLY, user ID JOBUSER)",
+        "A 00671 Internal session terminated with a runtime error DBSQL_SQL_ERROR (see ST22)",
+        "A 00518 Job canceled"
+      ]
+    }
+  },
+  {
+    "id": "basis_rfc_communication",
+    "expected": "BASIS",
+    "alert": {
+      "job_name": "ZHR_PAYROLL_TO_BW", "program": "ZHR_PAYROLL_TO_BW", "variant": "DELTA",
+      "error_type": "DUMP", "runtime_error": "CALL_FUNCTION_COMMUNICATION_FAILURE",
+      "error_program": "ZHR_PAYROLL_TO_BW", "error_include": "ZHR_PAYROLL_TO_BW", "error_line": "95",
+      "error_message": "Communication error with RFC destination BW_PRD: partner not reached (host unknown, connection refused)",
+      "joblog": [
+        "S 00516 Job started",
+        "S 00550 Step 001 started (program ZHR_PAYROLL_TO_BW, variant DELTA, user ID JOBUSER)",
+        "A 00671 Internal session terminated with a runtime error CALL_FUNCTION_COMMUNICATION_FAILURE (see ST22)",
+        "A 00518 Job canceled"
+      ]
+    }
+  }
+]

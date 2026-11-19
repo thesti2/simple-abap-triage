@@ -84,6 +84,7 @@ CLASS zcl_triage_job_monitor DEFINITION
 
     DATA mv_dest TYPE rfcdest.
     DATA mv_days TYPE i.
+    DATA mv_sent_id TYPE indx-srtfd.
     DATA mo_runner TYPE REF TO zcl_triage_runner.
 
     METHODS load_sent RETURNING VALUE(rt_sent) TYPE tt_sent.
@@ -102,6 +103,10 @@ CLASS zcl_triage_job_monitor IMPLEMENTATION.
     mv_dest   = iv_dest.
     mv_days   = iv_days.
     mo_runner = NEW #( ).
+    " unit tests inject a separate INDX key, so real 'sent' data is never touched
+    TEST-SEAM sent_store.
+      mv_sent_id = c_indx_id.
+    END-TEST-SEAM.
   ENDMETHOD.
 
 
@@ -212,6 +217,8 @@ CLASS zcl_triage_job_monitor IMPLEMENTATION.
 
     rs_result-alert_id = is_alert-alert_id.
 
+    " unit tests inject a successful response instead of the HTTP call
+    TEST-SEAM http_send.
     cl_http_client=>create_by_destination(
       EXPORTING  destination = mv_dest
       IMPORTING  client      = lo_client
@@ -240,6 +247,7 @@ CLASS zcl_triage_job_monitor IMPLEMENTATION.
     rs_result-ok      = xsdbool( rs_result-http_status BETWEEN 200 AND 299 ).
     rs_result-message = |HTTP { rs_result-http_status } { substring( val = lv_body len = nmin( val1 = 200 val2 = strlen( lv_body ) ) ) }|.
     lo_client->close( ).
+    END-TEST-SEAM.
   ENDMETHOD.
 
 
@@ -263,7 +271,7 @@ CLASS zcl_triage_job_monitor IMPLEMENTATION.
 
 
   METHOD load_sent.
-    IMPORT sent = rt_sent FROM DATABASE indx(zt) ID c_indx_id.
+    IMPORT sent = rt_sent FROM DATABASE indx(zt) ID mv_sent_id.
     IF sy-subrc <> 0.
       CLEAR rt_sent.
     ENDIF.
@@ -275,7 +283,7 @@ CLASS zcl_triage_job_monitor IMPLEMENTATION.
     " keep 30 days of history
     DATA(lv_limit) = CONV d( sy-datum - 30 ).
     DELETE lt_sent WHERE sent_on < lv_limit.
-    EXPORT sent = lt_sent TO DATABASE indx(zt) ID c_indx_id.
+    EXPORT sent = lt_sent TO DATABASE indx(zt) ID mv_sent_id.
     COMMIT WORK.
   ENDMETHOD.
 

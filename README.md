@@ -186,6 +186,7 @@ uv run pytest                                  # unit tests (no external calls)
 uv run uvicorn app.main:app --port 8000        # backend (Slack Socket Mode)
 uv run python -m app.fix.worker                # fix worker (second terminal)
 uv run python scripts/send_alert.py div0 --new-id   # send a test alert like xMatters would
+uv run python -m app.pipeline.evaluation --langsmith  # classification eval (13 cases) as LangSmith experiment
 ```
 
 More: [`docs/runbook.md`](docs/runbook.md) (local operation), [`infra/terraform/README.md`](infra/terraform/README.md)
@@ -195,12 +196,12 @@ More: [`docs/runbook.md`](docs/runbook.md) (local operation), [`infra/terraform/
 
 | Phase | Content | Status |
 |---|---|---|
-| 1 | SAP: demo program, job monitor → xMatters, runner, TR release | done (alerts received in xMatters) |
+| 1 | SAP: demo program, job monitor → xMatters, runner, TR release | done (alerts received in xMatters; dedup + retry unit-tested) |
 | 2 | Slack integration (cards, threads, buttons, Socket Mode) | done locally; HTTP mode after deploy |
-| 3.1–3.2 | Alert pipeline + classification | done (3/3 demo alerts correctly classified) |
+| 3.1–3.2 | Alert pipeline + classification | done (eval: 13/13 alerts correctly classified, target ≥ 90 %) |
 | 3.3 | Chat agent in Slack threads | done |
 | 3.4 | Fix agent with test document | done (live fix in DEV: before dump, after finished) |
-| 3.5 | Approval + TR release | built; live release pending approval |
+| 3.5 | Approval + TR release | done (fix TR released after approval in Slack) |
 | – | Deploy to GCP (Terraform + Cloud Run) | infrastructure code ready, not applied |
 
 Details and checklists: [`PLAN.md`](PLAN.md).

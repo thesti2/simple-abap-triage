@@ -235,6 +235,10 @@ infra/terraform/backend.hcl
 # Local SQLite database
 triage.db
 triage_chat.db
+triage_chat.db-shm
+triage_chat.db-wal
+triage.db-shm
+triage.db-wal
 *.db-journal
 
 # Generated fix test documents (may contain system details)

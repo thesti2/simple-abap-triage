@@ -101,3 +101,70 @@ CLASS ltc_report IMPLEMENTATION.
                                level = if_aunit_constants=>tolerable quit = if_aunit_constants=>no ).
   ENDMETHOD.
 ENDCLASS.
+
+"! Dedup + retry of run( ). Uses a separate INDX key (test seam) - the real 'sent' list is untouched.
+"! No alert ever reaches xMatters: the success case injects the HTTP response, the failure case uses
+"! a destination that does not exist.
+CLASS ltc_dedup DEFINITION FINAL FOR TESTING
+  DURATION MEDIUM
+  RISK LEVEL HARMLESS.
+  PRIVATE SECTION.
+    CONSTANTS c_test_id TYPE indx-srtfd VALUE 'ZTRIAGE_SENT_UT'.
+    METHODS setup.
+    METHODS teardown.
+    METHODS jobs RETURNING VALUE(rt_job) TYPE zcl_triage_job_monitor=>tt_jobname_range.
+    METHODS second_run_sends_nothing FOR TESTING.
+    METHODS failed_send_is_retried FOR TESTING.
+ENDCLASS.
+
+CLASS ltc_dedup IMPLEMENTATION.
+  METHOD setup.
+    TEST-INJECTION sent_store.
+      mv_sent_id = 'ZTRIAGE_SENT_UT'.
+    END-TEST-INJECTION.
+    DELETE FROM DATABASE indx(zt) ID c_test_id.
+  ENDMETHOD.
+
+  METHOD teardown.
+    DELETE FROM DATABASE indx(zt) ID c_test_id.
+    COMMIT WORK.
+  ENDMETHOD.
+
+  METHOD jobs.
+    rt_job = VALUE #( ( sign = 'I' option = 'EQ' low = 'ZTRIAGE_TEST_DIV0' ) ).
+  ENDMETHOD.
+
+  METHOD second_run_sends_nothing.
+    TEST-INJECTION http_send.
+      rs_result-ok          = abap_true.
+      rs_result-http_status = 202.
+      rs_result-message     = 'HTTP 202 (test double)'.
+    END-TEST-INJECTION.
+    DATA(lo_cut) = NEW zcl_triage_job_monitor( iv_days = 7 ).
+
+    DATA(lt_first) = lo_cut->run( it_jobname = jobs( ) ).
+    cl_abap_unit_assert=>assert_not_initial( act = lt_first msg = 'First run must send the cancelled job(s)' ).
+    LOOP AT lt_first INTO DATA(ls_first).
+      cl_abap_unit_assert=>assert_true( act = ls_first-ok msg = ls_first-message ).
+    ENDLOOP.
+
+    DATA(lt_second) = lo_cut->run( it_jobname = jobs( ) ).
+    cl_abap_unit_assert=>assert_initial( act = lt_second msg = 'Second run must not resend already sent jobs' ).
+  ENDMETHOD.
+
+  METHOD failed_send_is_retried.
+    DATA(lo_cut) = NEW zcl_triage_job_monitor( iv_dest = 'ZTRIAGE_NO_SUCH_DEST' iv_days = 7 ).
+
+    DATA(lt_first) = lo_cut->run( it_jobname = jobs( ) ).
+    cl_abap_unit_assert=>assert_not_initial( act = lt_first ).
+    LOOP AT lt_first INTO DATA(ls_first).
+      cl_abap_unit_assert=>assert_false( act = ls_first-ok msg = 'Send to a missing destination must fail' ).
+      cl_abap_unit_assert=>assert_char_cp( act = ls_first-message exp = '*ZTRIAGE_NO_SUCH_DEST*' ).
+    ENDLOOP.
+
+    " not remembered as sent -> the next run tries again
+    DATA(lt_second) = lo_cut->run( it_jobname = jobs( ) ).
+    cl_abap_unit_assert=>assert_equals( act = lines( lt_second ) exp = lines( lt_first )
+                                        msg = 'Failed jobs must be sent again on the next run' ).
+  ENDMETHOD.
+ENDCLASS.

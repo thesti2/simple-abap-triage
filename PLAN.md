@@ -146,7 +146,7 @@ messages (e.g. already released, lock/object errors). **No import** – the impo
 TMS/Basis process. Needs `S_TRANSPRT` authorization for release (standard developer authorization).
 
 ### Phase 1 success checklist
-*Status 2026-11-18. Tests: `ZCL_TRIAGE_RUNNER` 7/7 passed, `ZCL_TRIAGE_JOB_MONITOR` 7/7 passed.*
+*Status 2026-11-19. Tests: `ZCL_TRIAGE_RUNNER` 7/7 passed, `ZCL_TRIAGE_JOB_MONITOR` 9/9 passed (incl. dedup + retry).*
 - [x] `ZTRIAGE_DEMO_BUG` + all objects activated in DEV; source copies in `ABAP/` (taken from the active version).
 - [x] Each variant run as a real background job gives the expected result (3 cancelled, `ZOK` finished); dump name + line found.
 - [x] Monitor (collect / test mode) reports the 3 cancelled jobs with correct program, real variant, times, error text, dump; `ZOK` not reported; `ZTRIAGE_RUN_*` excluded.
@@ -155,8 +155,10 @@ TMS/Basis process. Needs `S_TRANSPRT` authorization for release (standard develo
 - [x] `Z_TRIAGE_TR_RELEASE` (RFC-enabled): invalid TR → error, task → error, released TR → "already released" (no dump).
 - [x] All objects in package `<SAP_PACKAGE>`, one TR (<PHASE1_TR>); ATC: 0 errors, 1 warning (sequential DELETE on small hashed table), infos only.
 - [x] **Real send:** monitor without test mode → alerts received in xMatters (confirmed by user 2026-11-18).
-- [ ] Second run sends nothing new (dedup) – re-check when the job is scheduled.
-- [ ] Failure to reach xMatters is logged and retried next run (test with a wrong destination name).
+- [x] Second run sends nothing new (dedup) – unit test `ltc_dedup->second_run_sends_nothing` (HTTP response injected via
+      test seam, separate INDX key; nothing reaches xMatters). Re-observe once the job is scheduled in SM36.
+- [x] Failure to reach xMatters is logged and retried next run – unit test `ltc_dedup->failed_send_is_retried` (wrong
+      destination name → send result not OK with message, job not marked sent, sent again on the next run).
 - [ ] *(Deferred)* `Z_TRIAGE_TR_RELEASE` releases a real TR – tested in Phase 3.5 instead of a dummy TR.
 - [ ] *(Deferred)* Job `ZTRIAGE_JOB_MONITOR` scheduled in SM36 every 5 minutes – after the xMatters flow to the backend is ready.
 
@@ -256,7 +258,9 @@ The import into `<UAT_SID>` is **not** done by the agent; it follows the normal 
 - [x] Bad / missing / unconfigured token → 401; malformed payload → 422; LLM down → rule-based result, card marked
       "rule-based"; chat down → alert stays `TRIAGED` in DB.
 - [x] Live classification of the 3 demo dumps: DEVELOPER / FUNCTIONAL / BASIS all correct (confidence 0.99).
-- [ ] Classification eval with ~10 more synthetic payloads (≥ 90 %), tracked as a LangSmith dataset.
+- [x] Classification eval: 3 demo + 10 synthetic payloads (`tests/fixtures/eval_classification.json`), 13/13 correct
+      (target ≥ 90 %); LangSmith dataset `abap-triage-classification` + experiment
+      (`uv run python -m app.pipeline.evaluation [--langsmith]`, live test `test_live_eval_accuracy`).
 - [x] In the alert's Slack thread: "@bot what is the root cause?" → answer grounded in stored alert data; "list open alerts" works
       (3.3 chat agent `app/agents/chat_agent.py`; 11 unit tests + 4 live tests).
 - [x] "Fix it" on a Functional/Basis alert is refused with an explanation (button and chat).
@@ -275,11 +279,15 @@ The import into `<UAT_SID>` is **not** done by the agent; it follows the normal 
       background jobs" rule, wait + retry for stale program load after activation, second attempt with after-run result.
 - [x] 3.5 release code: worker releases the fix TR of `APPROVED` alerts via `Z_TRIAGE_TR_RELEASE` (ABAP Unit helper);
       failure keeps `APPROVED` + error in thread (4 offline tests). Phase 1 TR released with the same mechanism.
-- [ ] `release_tr` before approval is refused; after **Approve** the TR is released (visible in SE09) and status `RELEASED`.
+- [x] Release before approval is refused (status rules + tests); after **Approve** in Slack the fix TR was released
+      by the worker (2026-11-19, TR status `O`, object no longer locked) and the alert is `RELEASED`.
 - [ ] If release fails (e.g. object locked, ATC block), status stays `APPROVED` and the error is posted to the thread.
 - [ ] Every step visible as a trace in LangSmith; every status change in `alert_events`.
 - [ ] Any GCP resource added in Phase 3 is in Terraform; `terraform plan` shows no changes after apply.
-- [ ] **End-to-end test:** schedule `ZBUG_DIV0` job → monitor → xMatters → Slack card → fix → approve → TR released, with no manual step other than the Slack actions.
+- [x] Local end-to-end (2026-11-19): alert via webhook → Slack card → *Fix it* → fix in DEV → test document → *Approve* →
+      TR released, no manual step other than the Slack actions.
+- [ ] **Full end-to-end test** (after GCP deploy): schedule `ZBUG_DIV0` job → monitor → xMatters → Cloud Run → Slack card →
+      fix → approve → TR released. Needs: SM36 schedule, xMatters flow to the webhook, demo bug re-introduced.
 
 ---
 

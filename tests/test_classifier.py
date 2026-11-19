@@ -63,3 +63,41 @@ def test_live_llm_classification(name, category):
     print(f"\n{name}: {result.category} ({result.confidence:.2f}) - {result.root_cause}\n  -> {result.recommendation}")
     assert source == "llm"
     assert result.category == category
+
+
+# ---------------------------------------------------------------- eval set (app/pipeline/evaluation.py)
+def test_eval_set_is_valid_and_balanced():
+    from app.pipeline.evaluation import load_cases
+
+    cases = load_cases()
+    assert len(cases) >= 13
+    assert len({c.id for c in cases}) == len(cases)
+    for cat in ("DEVELOPER", "FUNCTIONAL", "BASIS"):
+        assert sum(c.expected == cat for c in cases) >= 3, cat
+
+
+def test_eval_runner_counts_accuracy():
+    from app.pipeline.evaluation import accuracy, load_cases, run_eval
+
+    class Always:
+        def __call__(self, alert):
+            return TriageResult(category="DEVELOPER", confidence=1, summary="s", root_cause="r",
+                                recommendation="x", fixable_by_agent=True), "llm"
+
+    cases = load_cases()
+    outcomes = run_eval(Always(), cases)
+    assert accuracy(outcomes) == sum(c.expected == "DEVELOPER" for c in cases) / len(cases)
+
+
+@pytest.mark.live
+def test_live_eval_accuracy():
+    """Real OpenRouter calls on the whole eval set: >= 90 % correct."""
+    from app.config import get_settings
+    from app.llm import get_llm
+    from app.pipeline.evaluation import TARGET_ACCURACY, accuracy, run_eval
+
+    s = get_settings()
+    outcomes = run_eval(LLMClassifier(get_llm(s), method=s.structured_output_method))
+    misses = [f"{o.case.id}: expected {o.case.expected}, got {o.category}" for o in outcomes if not o.correct]
+    assert all(o.source == "llm" for o in outcomes)
+    assert accuracy(outcomes) >= TARGET_ACCURACY, misses
