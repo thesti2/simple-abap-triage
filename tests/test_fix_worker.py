@@ -49,7 +49,13 @@ class FakeAdt:
             self.source = self.inactive
         return "Activation successful"
 
+    release_ok = True
+
     async def run_unit_tests(self, name, obj_type="CLAS"):
+        if "Z_TRIAGE_TR_RELEASE" in self.test_include:
+            data = ({"released": "X", "status": "R", "messages": ["S: XYZK900001 released"]} if self.release_ok
+                    else {"released": "", "status": "D", "messages": ["E: Release of XYZK900001 failed (rc 8): object locked"]})
+            return "Critical Assertion Error: 'TRIAGE_RELEASE' Details: '@@EVIDENCE@@" + json.dumps(data) + "@@END@@'"
         buggy = "p_total / p_qty" in self.source and ("IF p_qty = 0" not in self.source or not self.fix_works)
         return _unit_output("A", "COMPUTE_INT_ZERODIVIDE") if buggy else _unit_output("F")
 
@@ -254,6 +260,45 @@ def test_second_attempt_gets_after_result(repo, chat, fix_alert, tmp_path):
     status = asyncio.run(_worker(repo, chat, adt, model, tmp_path, max_attempts=2).process(fix_alert))
     assert status == "FIX_FAILED"
     assert any("Attempt 1" in text for _, text in chat.replies)
+
+
+# ---------------------------------------------------------------- 3.5 release
+def _approved(repo, aid, tr="XYZK900001"):
+    for s in ("FIX_IN_PROGRESS", "FIX_READY"):
+        repo.transition(aid, s)
+    repo.transition(aid, "APPROVED", actor="slack:U9", approved_by="U9", fix_tr=tr)
+
+
+def test_release_after_approval(repo, chat, fix_alert, tmp_path):
+    _approved(repo, fix_alert)
+    adt = FakeAdt()
+    w = _worker(repo, chat, adt, _fix_script(), tmp_path)
+    w.uat_sid = "UAT"
+    assert asyncio.run(w.release(fix_alert)) == "RELEASED"
+    assert "iv_trkorr   = 'XYZK900001'" in adt.test_include
+    assert repo.get(fix_alert).status == "RELEASED"
+    assert "released (approved by <@U9>) - ready for import to UAT" in chat.replies[-1][1]
+
+
+def test_release_failure_keeps_approved(repo, chat, fix_alert, tmp_path):
+    _approved(repo, fix_alert)
+    adt = FakeAdt()
+    adt.release_ok = False
+    assert asyncio.run(_worker(repo, chat, adt, _fix_script(), tmp_path).release(fix_alert)) == "APPROVED"
+    assert "was not released" in chat.replies[-1][1] and "object locked" in chat.replies[-1][1]
+
+
+def test_release_only_when_approved(repo, chat, fix_alert, tmp_path):
+    adt = FakeAdt()
+    assert asyncio.run(_worker(repo, chat, adt, _fix_script(), tmp_path).release(fix_alert)) == "FIX_REQUESTED"
+    assert adt.test_include == ""  # nothing was prepared / released
+
+
+def test_release_template_rejects_bad_tr():
+    from app.fix.evidence import render_release_include
+
+    with pytest.raises(ValueError):
+        render_release_include("XYZK90' ). DELETE")
 
 
 def test_worker_refuses_standard_program(repo, chat, fix_alert, tmp_path):

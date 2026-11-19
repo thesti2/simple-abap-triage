@@ -267,8 +267,14 @@ The import into `<UAT_SID>` is **not** done by the agent; it follows the normal 
       reproduce via ABAP Unit helper `ZCL_TRIAGE_EVIDENCE` (`$TMP`), guarded fix agent (only the alert's Z/Y program,
       worker-chosen TR, ≤5 edits, activate only after clean check), source diff, ATC, LLM RCA, HTML report + PNG
       before/after "screenshots"; 11 offline tests (happy path, no-repro, not activated, fix not helping, standard program).
-- [ ] **Live:** "Fix it" on `ZBUG_DIV0` → sub-agent fixes `ZTRIAGE_DEMO_BUG` in DEV, before = dump, after = success, ATC clean,
-      test doc + RCA + diff posted to the thread, status `FIX_READY`, TR number recorded. *(needs OK: changes SAP DEV)*
+- [x] **Live (2026-11-19):** "Fix it" on `ZBUG_DIV0` → fix agent changed `ZTRIAGE_DEMO_BUG` in DEV (zero-quantity guard,
+      warning message, no job cancel); before = `COMPUTE_INT_ZERODIVIDE` line 55, after = FINISHED; ATC 0 errors/0 warnings;
+      before/after PNGs + HTML test document + RCA uploaded to the thread; status `FIX_READY`; new fix TR recorded.
+      Phase 1 TR was released first so the fix got its own TR.
+      Lessons built in: MCP structured content, tool errors back to the agent, TR reuse on retry, "no E/A message in
+      background jobs" rule, wait + retry for stale program load after activation, second attempt with after-run result.
+- [x] 3.5 release code: worker releases the fix TR of `APPROVED` alerts via `Z_TRIAGE_TR_RELEASE` (ABAP Unit helper);
+      failure keeps `APPROVED` + error in thread (4 offline tests). Phase 1 TR released with the same mechanism.
 - [ ] `release_tr` before approval is refused; after **Approve** the TR is released (visible in SE09) and status `RELEASED`.
 - [ ] If release fails (e.g. object locked, ATC block), status stays `APPROVED` and the error is posted to the thread.
 - [ ] Every step visible as a trace in LangSmith; every status change in `alert_events`.

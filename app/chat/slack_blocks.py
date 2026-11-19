@@ -94,7 +94,7 @@ def approval_blocks(alert_id: str, text: str) -> list[dict[str, Any]]:
             "type": "actions",
             "elements": [
                 {"type": "button", "action_id": ACTION_APPROVE, "style": "primary",
-                 "text": {"type": "plain_text", "text": "Approve & release TR"}, "value": alert_id},
+                 "text": {"type": "plain_text", "text": "Approve and release TR"}, "value": alert_id},
                 {"type": "button", "action_id": ACTION_REJECT, "style": "danger",
                  "text": {"type": "plain_text", "text": "Reject"}, "value": alert_id},
             ],

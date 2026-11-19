@@ -24,7 +24,7 @@ from app.db import Alert, Repository
 from app.fix.adt import AdtGateway
 from app.fix.evidence import EVIDENCE_CLASS, Evidence, parse_unit_output, render_test_include
 from app.fix.fix_agent import FixSession, run_fix_agent
-from app.fix.release import prepare_include
+from app.fix.release import prepare_include, release_transport
 from app.fix.report import FixReport, build_report, unified_diff
 from app.status import Status
 
@@ -36,8 +36,10 @@ REPORT_DIR = ROOT / "reports"
 class FixWorker:
     def __init__(self, repo: Repository, adt: AdtGateway, llm: BaseChatModel, chat: ChatClient,
                  report_dir: Path = REPORT_DIR, abap_copy_dir: Path | None = ROOT / "ABAP",
-                 activation_wait_s: float = 45, stale_retries: int = 3, max_attempts: int = 2) -> None:
+                 activation_wait_s: float = 45, stale_retries: int = 3, max_attempts: int = 2,
+                 uat_sid: str = "") -> None:
         self.repo, self.adt, self.llm, self.chat = repo, adt, llm, chat
+        self.uat_sid = uat_sid
         self.report_dir, self.abap_copy_dir = report_dir, abap_copy_dir
         self.activation_wait_s, self.stale_retries, self.max_attempts = activation_wait_s, stale_retries, max_attempts
 
@@ -172,6 +174,34 @@ class FixWorker:
                                                 f"`@abap-triage please fix it`.")
             return Status.FIX_FAILED
 
+    async def release(self, alert_id: str) -> str:
+        """Phase 3.5: an APPROVED alert -> release its fix TR (tasks + request). Import to UAT stays with TMS/Basis."""
+        a = self.repo.get(alert_id)
+        if a.status != Status.APPROVED:
+            return a.status
+        if not a.fix_tr:
+            self._say(a, ":warning: Approved, but no fix transport is recorded - nothing to release.")
+            return a.status
+        try:
+            result = await release_transport(self.adt, a.fix_tr)
+        except Exception as e:  # noqa: BLE001 - keep APPROVED, report, retry possible
+            log.exception("release failed for %s", alert_id)
+            self._say(a, f":x: Releasing TR `{a.fix_tr}` failed: {e}\nStatus stays *APPROVED*; it will be retried.")
+            return a.status
+        if not result["released"]:
+            msgs = "; ".join(result.get("messages", [])) or "no details"
+            self._say(a, f":x: TR `{a.fix_tr}` was not released: {msgs}\nStatus stays *APPROVED* - "
+                         f"please check the TR in SE09/SE10.")
+            return a.status
+        approver = f"<@{a.approved_by}>" if a.approved_by else "the approver"
+        self.repo.transition(alert_id, Status.RELEASED, actor="fix-worker",
+                             note=f"TR {a.fix_tr} released (status {result.get('status')}); approved by {a.approved_by}")
+        self._refresh_card(alert_id)
+        uat = f" to {self.uat_sid}" if self.uat_sid else ""
+        self._say(a, f":rocket: TR `{a.fix_tr}` released (approved by {approver}) - ready for import{uat}.\n"
+                     + "\n".join(f"• {m}" for m in result.get("messages", [])))
+        return Status.RELEASED
+
     def _copy_source(self, program: str, source: str) -> None:
         if self.abap_copy_dir is None:
             return
@@ -181,10 +211,17 @@ class FixWorker:
 
     async def run_forever(self, interval_s: int = 15) -> None:
         log.info("fix worker polling every %ss", interval_s)
+        failed_releases: dict[str, int] = {}
         while True:
             for a in self.repo.list_alerts(statuses=[Status.FIX_REQUESTED], limit=5):
-                log.info("processing %s", a.alert_id)
+                log.info("fixing %s", a.alert_id)
                 await self.process(a.alert_id)
+            for a in self.repo.list_alerts(statuses=[Status.APPROVED], limit=5):
+                if failed_releases.get(a.alert_id, 0) >= 3:  # don't spam the thread; needs a human
+                    continue
+                log.info("releasing TR of %s", a.alert_id)
+                if await self.release(a.alert_id) != Status.RELEASED:
+                    failed_releases[a.alert_id] = failed_releases.get(a.alert_id, 0) + 1
             await asyncio.sleep(interval_s)
 
 
@@ -197,7 +234,8 @@ def _build() -> FixWorker:
 
     s = get_settings()
     adt = AdtGateway(os.environ["SAP_ADT_MCP_URL"], os.environ["SAP_ADT_MCP_AUTH"], os.environ["SAP_ADT_DESTINATION"])
-    return FixWorker(Repository(s.database_url), adt, get_llm(s), SlackChatClient(s.slack_bot_token, s.slack_channel_id))
+    return FixWorker(Repository(s.database_url), adt, get_llm(s), SlackChatClient(s.slack_bot_token, s.slack_channel_id),
+                     uat_sid=s.sap_uat_sid)
 
 
 if __name__ == "__main__":
