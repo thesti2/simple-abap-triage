@@ -202,6 +202,6 @@ More: [`docs/runbook.md`](docs/runbook.md) (local operation), [`infra/terraform/
 | 3.3 | Chat agent in Slack threads | done |
 | 3.4 | Fix agent with test document | done (live fix in DEV: before dump, after finished) |
 | 3.5 | Approval + TR release | done (fix TR released after approval in Slack) |
-| – | Deploy to GCP (Terraform + Cloud Run) | infrastructure code ready, not applied |
+| – | Deploy to GCP (Terraform + Cloud Run) | code + infrastructure ready (Dockerfile, Postgres, Slack HTTP mode); not applied |
 
 Details and checklists: [`PLAN.md`](PLAN.md).

@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,12 @@ from app.status import Status
 log = logging.getLogger("fix_worker")
 ROOT = Path(__file__).resolve().parents[2]
 REPORT_DIR = ROOT / "reports"
+_TR_RE = re.compile(r"\b[A-Z0-9]{3}K\d{6}\b")
+
+
+def root_tr_messages(messages: list[str], root_tr: str) -> list[str]:
+    """Release messages for the chat: drop those naming another TR (the request's tasks), keep the rest."""
+    return [m for m in messages if all(tr == root_tr for tr in _TR_RE.findall(m))]
 
 
 class FixWorker:
@@ -189,7 +196,7 @@ class FixWorker:
             self._say(a, f":x: Releasing TR `{a.fix_tr}` failed: {e}\nStatus stays *APPROVED*; it will be retried.")
             return a.status
         if not result["released"]:
-            msgs = "; ".join(result.get("messages", [])) or "no details"
+            msgs = "; ".join(root_tr_messages(result.get("messages", []), a.fix_tr)) or "no details"
             self._say(a, f":x: TR `{a.fix_tr}` was not released: {msgs}\nStatus stays *APPROVED* - "
                          f"please check the TR in SE09/SE10.")
             return a.status
@@ -198,8 +205,8 @@ class FixWorker:
                              note=f"TR {a.fix_tr} released (status {result.get('status')}); approved by {a.approved_by}")
         self._refresh_card(alert_id)
         uat = f" to {self.uat_sid}" if self.uat_sid else ""
-        self._say(a, f":rocket: TR `{a.fix_tr}` released (approved by {approver}) - ready for import{uat}.\n"
-                     + "\n".join(f"• {m}" for m in result.get("messages", [])))
+        # only the root TR is named in the chat - its tasks are an SAP detail (AGENTS.md "Improvements")
+        self._say(a, f":rocket: TR `{a.fix_tr}` released (approved by {approver}) - ready for import{uat}.")
         return Status.RELEASED
 
     def _copy_source(self, program: str, source: str) -> None:
@@ -234,7 +241,7 @@ def _build() -> FixWorker:
 
     s = get_settings()
     adt = AdtGateway(os.environ["SAP_ADT_MCP_URL"], os.environ["SAP_ADT_MCP_AUTH"], os.environ["SAP_ADT_DESTINATION"])
-    return FixWorker(Repository(s.database_url), adt, get_llm(s), SlackChatClient(s.slack_bot_token, s.slack_channel_id),
+    return FixWorker(Repository(s.db_url), adt, get_llm(s), SlackChatClient(s.slack_bot_token, s.slack_channel_id),
                      uat_sid=s.sap_uat_sid)
 
 

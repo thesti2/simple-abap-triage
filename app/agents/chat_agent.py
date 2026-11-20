@@ -163,14 +163,32 @@ class ChatAgent:
 
 
 def make_checkpointer(database_url: str) -> Any:
-    """SQLite file next to the local DB; Postgres checkpointer is added with the Cloud SQL deployment."""
-    import sqlite3
-
-    from langgraph.checkpoint.sqlite import SqliteSaver
-
+    """Chat memory store: SQLite file next to the local DB, or the same Postgres database (Cloud SQL)."""
     if database_url.startswith("sqlite:///"):
+        import sqlite3
+
+        from langgraph.checkpoint.sqlite import SqliteSaver
+
         path = database_url.removeprefix("sqlite:///")
         conn = sqlite3.connect(path.replace(".db", "_chat.db") if path.endswith(".db") else path + "_chat",
                                check_same_thread=False)
         return SqliteSaver(conn)
-    raise NotImplementedError("Postgres checkpointer is added with the Cloud SQL deployment")
+    if database_url.startswith("postgresql"):
+        from langgraph.checkpoint.postgres import PostgresSaver
+        from psycopg.rows import dict_row
+        from psycopg_pool import ConnectionPool
+
+        pool = ConnectionPool(pg_conninfo(database_url), min_size=1, max_size=5, open=True,
+                              check=ConnectionPool.check_connection,
+                              kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row})
+        saver = PostgresSaver(pool)  # type: ignore[arg-type]
+        saver.setup()  # creates/migrates the checkpoint tables (idempotent)
+        return saver
+    raise ValueError(f"unsupported database URL scheme for chat memory: {database_url.split(':', 1)[0]}")
+
+
+def pg_conninfo(database_url: str) -> str:
+    """SQLAlchemy URL (postgresql+psycopg://...) -> libpq URI for psycopg."""
+    from sqlalchemy.engine import make_url
+
+    return make_url(database_url).set(drivername="postgresql").render_as_string(hide_password=False)

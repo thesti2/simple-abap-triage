@@ -214,6 +214,14 @@ resource "google_cloud_run_v2_service" "app" {
         value = var.langsmith_project
       }
       env {
+        name  = "LANGSMITH_ENDPOINT"
+        value = var.langsmith_endpoint
+      }
+      env {
+        name  = "SLACK_MODE"
+        value = "http" # Slack Request URLs -> /slack/events, /slack/interactions (no Socket Mode on Cloud Run)
+      }
+      env {
         name  = "SLACK_CHANNEL_ID"
         value = var.slack_channel_id
       }

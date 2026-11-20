@@ -37,7 +37,7 @@ class Services:
 
 
 def default_services(settings: Settings) -> Services:
-    repo = Repository(settings.database_url)
+    repo = Repository(settings.db_url)
     chat_agent = None
     if settings.openrouter_api_key and settings.model:
         from app.agents.chat_agent import ChatAgent, make_checkpointer
@@ -45,7 +45,7 @@ def default_services(settings: Settings) -> Services:
 
         llm = get_llm(settings)
         classifier: Classifier = LLMClassifier(llm, method=settings.structured_output_method)
-        chat_agent = ChatAgent(llm, repo, make_checkpointer(settings.database_url))
+        chat_agent = ChatAgent(llm, repo, make_checkpointer(settings.db_url))
     else:
         log.warning("no LLM configured - using rule-based classification, no chat agent")
         classifier = lambda a: (rule_based(a), "rules")  # noqa: E731

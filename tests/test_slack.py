@@ -123,3 +123,29 @@ def test_slack_http_url_verification(services, repo, chat):
     with _http_client(services, repo, chat) as c:
         r = c.post("/slack/events", content=body, headers=_signed("secret123", body))
         assert r.status_code == 200 and "abc" in r.text
+
+
+def test_slack_http_retry_is_acked_and_ignored(services, repo, chat):
+    """Slack re-delivers an event (X-Slack-Retry-Num) when the first ack was slow -> must not answer twice."""
+    calls = []
+
+    class Agent:
+        def answer(self, *a, **k):
+            calls.append(a)
+            return "x"
+
+    body = json.dumps({"type": "event_callback", "team_id": "T1", "api_app_id": "A1", "event_id": "Ev1",
+                       "event": {"type": "app_mention", "user": "U1", "text": "<@B1> hi", "channel": "C1",
+                                 "ts": "1.0"}})
+    services.settings.slack_mode = "http"
+    services.slack_app = build_slack_app("xoxb-test", "secret123", repo, chat, Agent(), token_verification_enabled=False)
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    with TestClient(create_app(services, start_socket_mode=False)) as c:
+        headers = {**_signed("secret123", body), "X-Slack-Retry-Num": "1", "X-Slack-Retry-Reason": "http_timeout"}
+        r = c.post("/slack/events", content=body, headers=headers)
+    time.sleep(0.3)
+    assert r.status_code == 200
+    assert calls == []

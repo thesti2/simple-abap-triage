@@ -201,7 +201,8 @@ The two Slack secrets are stored in Secret Manager (containers created by **Terr
 - [x] Backend posts an alert card to the channel (`python -m app.chat.slack --test` + 3 real cards from the pipeline).
 - [x] Reply with `thread_ts` lands in the same thread; mentioning the bot in that thread reaches the backend with the right `alert_id`.
 - [x] Button click (*Fix it*) reaches the backend with the `alert_id` → `FIX_REQUESTED`, actor = Slack user, reply in thread (Socket Mode; `/slack/interactions` in HTTP mode after deploy).
-- [ ] Slack retry of the same event (`X-Slack-Retry-Num`) is processed only once.
+- [x] Slack retry of the same event (`X-Slack-Retry-Num`) is processed only once – Bolt middleware acks and drops retries
+      (unit test, HTTP mode).
 - [ ] File upload (test document) appears in the alert thread.
 
 ---
@@ -282,10 +283,17 @@ The import into `<UAT_SID>` is **not** done by the agent; it follows the normal 
 - [x] Release before approval is refused (status rules + tests); after **Approve** in Slack the fix TR was released
       by the worker (2026-11-19, TR status `O`, object no longer locked) and the alert is `RELEASED`.
 - [ ] If release fails (e.g. object locked, ATC block), status stays `APPROVED` and the error is posted to the thread.
+- [x] Release messages in the chat name only the root TR, not its tasks (AGENTS.md *Improvements* 1; unit tests).
 - [ ] Every step visible as a trace in LangSmith; every status change in `alert_events`.
 - [ ] Any GCP resource added in Phase 3 is in Terraform; `terraform plan` shows no changes after apply.
 - [x] Local end-to-end (2026-11-19): alert via webhook → Slack card → *Fix it* → fix in DEV → test document → *Approve* →
       TR released, no manual step other than the Slack actions.
+- [x] Code ready for GCP (2026-11-20): `Dockerfile` (built by Cloud Build), Postgres via `psycopg` (URL from
+      `DB_SOCKET`/`DB_NAME`/`DB_USER`/`DB_PASSWORD` or `DATABASE_URL`), Postgres chat-memory checkpointer, Slack HTTP mode
+      (`SLACK_MODE=http` in Terraform). Checked locally against a real (embedded) Postgres: tables, duplicate check,
+      history, chat memory across restarts; production wiring in HTTP mode (signature check, `/health`, 401 webhook).
+- [ ] GCP deploy: `terraform plan` → OK → `apply`, secret values, image build + deploy, Slack Request URLs, Socket Mode off,
+      xMatters HTTP step (see `infra/terraform/README.md`).
 - [ ] **Full end-to-end test** (after GCP deploy): schedule `ZBUG_DIV0` job → monitor → xMatters → Cloud Run → Slack card →
       fix → approve → TR released. Needs: SM36 schedule, xMatters flow to the webhook, demo bug re-introduced.
 

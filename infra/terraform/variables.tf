@@ -26,6 +26,12 @@ variable "langsmith_project" {
   default     = "simple-abap-triage"
 }
 
+variable "langsmith_endpoint" {
+  description = "LangSmith API endpoint of your LangSmith region (US default; EU/APAC have their own)."
+  type        = string
+  default     = "https://api.smith.langchain.com"
+}
+
 variable "slack_channel_id" {
   description = "Slack channel ID (C...) of the triage channel. Not secret, but kept in git-ignored terraform.tfvars."
   type        = string

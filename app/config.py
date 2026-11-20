@@ -23,8 +23,15 @@ class Settings(BaseSettings):
     # xMatters -> backend webhook
     xmatters_webhook_token: str = ""
 
-    # Database (SQLite locally, Cloud SQL Postgres in GCP)
-    database_url: str = "sqlite:///./triage.db"
+    # Database (SQLite locally, Cloud SQL Postgres in GCP).
+    # DATABASE_URL wins if set (e.g. fix worker via Cloud SQL Auth Proxy:
+    # postgresql+psycopg://triage:<pw>@127.0.0.1:5432/triage). On Cloud Run, Terraform sets DB_SOCKET/DB_NAME/
+    # DB_USER/DB_PASSWORD instead and the URL is built from them (see `db_url`).
+    database_url: str = ""
+    db_socket: str = ""  # /cloudsql/<project>:<region>:<instance>
+    db_name: str = ""
+    db_user: str = ""
+    db_password: str = ""
 
     # Slack
     slack_bot_token: str = ""
@@ -35,6 +42,18 @@ class Settings(BaseSettings):
 
     # SAP (only shown in messages)
     sap_uat_sid: str = ""
+
+    @property
+    def db_url(self) -> str:
+        """SQLAlchemy URL: DATABASE_URL > Cloud SQL unix socket > local SQLite file."""
+        if self.database_url:
+            return self.database_url
+        if self.db_socket:
+            from sqlalchemy import URL
+
+            return URL.create("postgresql+psycopg", username=self.db_user, password=self.db_password,
+                              database=self.db_name, query={"host": self.db_socket}).render_as_string(hide_password=False)
+        return "sqlite:///./triage.db"
 
 
 @lru_cache

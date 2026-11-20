@@ -1,0 +1,2 @@
+# gcloud builds submit: same rules as .dockerignore (never upload .env or local DBs)
+#!include:.dockerignore

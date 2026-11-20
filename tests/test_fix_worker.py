@@ -53,8 +53,10 @@ class FakeAdt:
 
     async def run_unit_tests(self, name, obj_type="CLAS"):
         if "Z_TRIAGE_TR_RELEASE" in self.test_include:
-            data = ({"released": "X", "status": "R", "messages": ["S: XYZK900001 released"]} if self.release_ok
-                    else {"released": "", "status": "D", "messages": ["E: Release of XYZK900001 failed (rc 8): object locked"]})
+            data = ({"released": "X", "status": "R", "messages": ["S: XYZK900002 released", "S: XYZK900001 released"]}
+                    if self.release_ok else
+                    {"released": "", "status": "D", "messages": ["S: XYZK900002 released",
+                                                                 "E: Release of XYZK900001 failed (rc 8): object locked"]})
             return "Critical Assertion Error: 'TRIAGE_RELEASE' Details: '@@EVIDENCE@@" + json.dumps(data) + "@@END@@'"
         buggy = "p_total / p_qty" in self.source and ("IF p_qty = 0" not in self.source or not self.fix_works)
         return _unit_output("A", "COMPUTE_INT_ZERODIVIDE") if buggy else _unit_output("F")
@@ -278,6 +280,7 @@ def test_release_after_approval(repo, chat, fix_alert, tmp_path):
     assert "iv_trkorr   = 'XYZK900001'" in adt.test_include
     assert repo.get(fix_alert).status == "RELEASED"
     assert "released (approved by <@U9>) - ready for import to UAT" in chat.replies[-1][1]
+    assert "XYZK900002" not in chat.replies[-1][1]  # AGENTS.md: only the root TR in the chat, not its tasks
 
 
 def test_release_failure_keeps_approved(repo, chat, fix_alert, tmp_path):
@@ -286,6 +289,7 @@ def test_release_failure_keeps_approved(repo, chat, fix_alert, tmp_path):
     adt.release_ok = False
     assert asyncio.run(_worker(repo, chat, adt, _fix_script(), tmp_path).release(fix_alert)) == "APPROVED"
     assert "was not released" in chat.replies[-1][1] and "object locked" in chat.replies[-1][1]
+    assert "XYZK900002" not in chat.replies[-1][1]
 
 
 def test_release_only_when_approved(repo, chat, fix_alert, tmp_path):

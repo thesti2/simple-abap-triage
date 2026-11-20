@@ -1,0 +1,20 @@
+# keep secrets, local state and non-runtime files out of the image / Cloud Build upload
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+reports/
+.git/
+.venv/
+**/__pycache__/
+.pytest_cache/
+infra/
+ABAP/
+docs/
+tests/
+scripts/
+*.md
+.claude/

@@ -3,6 +3,8 @@ project_id       = "<GCP_PROJECT_ID>"
 region           = "asia-southeast1"
 model            = "<MODEL from .env>"
 slack_channel_id = "<SLACK_CHANNEL_ID>"
+langsmith_endpoint = "<LANGSMITH_ENDPOINT from .env>"
+# container_image = "<artifact_registry output>/abap-triage:<TAG>"   # README step 5
 enable_cloud_run = false
 paused              = false # true = stop Cloud SQL + no always-on Cloud Run (save cost)
 sql_instance_suffix = "v1"  # change after a destroy (deleted names are blocked ~1 week)

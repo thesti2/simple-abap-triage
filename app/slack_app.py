@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any
 
-from slack_bolt import App
+from slack_bolt import App, BoltResponse
 
 from app import actions
 from app.chat.base import ThreadRef
@@ -74,6 +74,16 @@ def build_slack_app(bot_token: str, signing_secret: str, repo: Repository, chat:
                     token_verification_enabled: bool = True) -> App:
     app = App(token=bot_token, signing_secret=signing_secret, process_before_response=False,
               token_verification_enabled=token_verification_enabled)
+
+    @app.middleware
+    def _ignore_slack_retries(req, resp, next):  # noqa: ANN001, A002 - Bolt middleware signature
+        """HTTP mode: Slack re-sends an event if the first delivery was not acked in 3 s. The first delivery is
+        already being processed, so a retry would answer twice -> ack it and do nothing."""
+        retry = req.headers.get("x-slack-retry-num")
+        if retry:
+            log.info("ignoring Slack retry %s (%s)", retry, req.headers.get("x-slack-retry-reason"))
+            return BoltResponse(status=200, body="")
+        return next()
 
     def _on_action(ack, body, action):  # noqa: ANN001 - Bolt injects arguments by name
         ack()  # must be < 3 s; the rest runs after the ack
