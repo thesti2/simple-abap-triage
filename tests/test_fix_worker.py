@@ -211,6 +211,53 @@ def test_worker_happy_path(repo, chat, fix_alert, tmp_path):
     assert [e.to_status for e in repo.history(fix_alert)][-2:] == ["FIX_IN_PROGRESS", "FIX_READY"]
 
 
+class _FakeScreens:
+    def __init__(self, fail=False):
+        self.calls, self.fail = [], fail
+
+    async def capture_run(self, program, variant, path):
+        self.calls.append((program, variant, path.name))
+        if self.fail:
+            raise RuntimeError("WebGUI logon failed")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        from PIL import Image
+        Image.new("RGB", (20, 10), "white").save(path)
+        return path
+
+
+def test_worker_uses_real_sap_screenshots(repo, chat, fix_alert, tmp_path):
+    screens = _FakeScreens()
+    w = _worker(repo, chat, FakeAdt(), _fix_script(), tmp_path)
+    w.screens = screens
+    assert asyncio.run(w.process(fix_alert)) == "FIX_READY"
+    assert [(p, v) for p, v, _ in screens.calls] == [("ZTRIAGE_DEMO_BUG", "ZBUG_DIV0")] * 2
+    uploaded = chat.uploaded
+    assert str(uploaded["Before fix"]).endswith("_before_sap.png") and str(uploaded["After fix"]).endswith("_after_sap.png")
+    html = next((tmp_path / "reports").glob("*_fix_report.html")).read_text(encoding="utf-8")
+    assert html.count("data:image/png;base64,") == 2 and "Background job result" in html
+
+
+def test_screenshot_failure_falls_back_to_text_images(repo, chat, fix_alert, tmp_path):
+    w = _worker(repo, chat, FakeAdt(), _fix_script(), tmp_path)
+    w.screens = _FakeScreens(fail=True)
+    assert asyncio.run(w.process(fix_alert)) == "FIX_READY"
+    uploaded = chat.uploaded
+    assert str(uploaded["Before fix"]).endswith("_before.png")
+    assert "data:image/png" not in next((tmp_path / "reports").glob("*_fix_report.html")).read_text(encoding="utf-8")
+
+
+def test_webgui_config_urls(monkeypatch):
+    from app.fix.webgui import WebGuiConfig
+
+    monkeypatch.delenv("SAP_WEBGUI_PASSWORD", raising=False)
+    assert WebGuiConfig.from_env() is None
+    cfg = WebGuiConfig("https://sap.example:44300/sap/bc/gui/sap/its/webgui?sap-client=100", "U", "P", "EN")
+    url = cfg.start_url("SA38 RS38M-PROGRAMM=ZX")
+    assert url.startswith("https://sap.example:44300/sap/bc/gui/sap/its/webgui?") and "sap-client=100" in url
+    assert "sap-language=EN" in url and "~transaction=SA38%20RS38M-PROGRAMM%3DZX" in url and "saml2=disabled" in url
+    assert cfg.logoff_url() == "https://sap.example:44300/sap/public/bc/icf/logoff"
+
+
 def test_worker_creates_transport_when_not_locked(repo, chat, fix_alert, tmp_path):
     adt = FakeAdt(locked_tr=None)
     asyncio.run(_worker(repo, chat, adt, _fix_script(), tmp_path).process(fix_alert))

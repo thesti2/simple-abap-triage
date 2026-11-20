@@ -243,3 +243,10 @@ triage.db-wal
 
 # Generated fix test documents (may contain system details)
 reports/
+
+# Claude Code personal settings
+.claude/settings.local.json
+
+# Terraform saved plans (contain project details)
+tfplan
+*.tfplan

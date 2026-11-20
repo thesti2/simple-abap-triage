@@ -1,7 +1,8 @@
-"""Test document: HTML report + PNG "screenshots" of the before/after runs (rendered from the job output)."""
+"""Test document: HTML report + before/after PNGs (real SAP screens via WebGUI, else rendered from the job output)."""
 
 from __future__ import annotations
 
+import base64
 import difflib
 import html
 from dataclasses import dataclass
@@ -66,15 +67,27 @@ def render_screenshot(ev: Evidence, title: str, path: Path) -> Path:
     return path
 
 
+def _img(path: Path, alt: str) -> str:
+    data = base64.b64encode(path.read_bytes()).decode()
+    return f'<p><img alt="{html.escape(alt)}" src="data:image/png;base64,{data}"></p>'
+
+
 def build_report(out_dir: Path, alert: dict, before: Evidence, after: Evidence, diff: str, rca: FixReport,
-                 transport: str, atc_summary: str, agent_notes: str) -> ReportFiles:
+                 transport: str, atc_summary: str, agent_notes: str,
+                 before_screen: Path | None = None, after_screen: Path | None = None) -> ReportFiles:
+    """before_screen/after_screen: real SAP screenshots (WebGUI); without them the job result is drawn as text."""
     out_dir.mkdir(parents=True, exist_ok=True)
     slug = alert["alert_id"].replace("/", "_")[-60:]
-    before_png = render_screenshot(before, f"BEFORE fix - {before.program} / {before.variant}", out_dir / f"{slug}_before.png")
-    after_png = render_screenshot(after, f"AFTER fix - {after.program} / {after.variant}", out_dir / f"{slug}_after.png")
+    before_png = before_screen or render_screenshot(
+        before, f"BEFORE fix - {before.program} / {before.variant}", out_dir / f"{slug}_before.png")
+    after_png = after_screen or render_screenshot(
+        after, f"AFTER fix - {after.program} / {after.variant}", out_dir / f"{slug}_after.png")
 
     def pre(text: str) -> str:
         return f"<pre>{html.escape(text)}</pre>"
+
+    def screen(path: Path | None, label: str) -> str:
+        return _img(path, f"SAP screen {label} the fix") + "<p>Background job result:</p>" if path else ""
 
     def diff_html(text: str) -> str:
         rows = []
@@ -89,7 +102,7 @@ def build_report(out_dir: Path, alert: dict, before: Evidence, after: Evidence, 
 <style>body{{font-family:Segoe UI,Arial,sans-serif;max-width:1000px;margin:24px auto;color:#222}}
 h1{{font-size:22px}} h2{{font-size:17px;border-bottom:1px solid #ddd;padding-bottom:4px;margin-top:28px}}
 table{{border-collapse:collapse}} td{{padding:3px 12px 3px 0;vertical-align:top}}
-pre{{background:#1e1e1e;color:#d4d4d4;padding:12px;overflow-x:auto;font-size:12.5px}}
+img{{max-width:100%;border:1px solid #ccc}} pre{{background:#1e1e1e;color:#d4d4d4;padding:12px;overflow-x:auto;font-size:12.5px}}
 .add{{color:#6a9955}} .del{{color:#f48771}} .ok{{color:#0a7a3e;font-weight:600}} .bad{{color:#b3261e;font-weight:600}}</style></head><body>
 <h1>Fix test document</h1>
 <table>
@@ -102,8 +115,8 @@ pre{{background:#1e1e1e;color:#d4d4d4;padding:12px;overflow-x:auto;font-size:12.
 </table>
 <h2>Root cause analysis</h2><p>{html.escape(rca.root_cause)}</p>
 <h2>What was changed</h2><p>{html.escape(rca.change_summary)}</p>{diff_html(diff or '(no change)')}
-<h2>Test: before the fix</h2>{pre(chr(10).join(_console_lines(before)))}
-<h2>Test: after the fix</h2>{pre(chr(10).join(_console_lines(after)))}
+<h2>Test: before the fix</h2>{screen(before_screen, 'before')}{pre(chr(10).join(_console_lines(before)))}
+<h2>Test: after the fix</h2>{screen(after_screen, 'after')}{pre(chr(10).join(_console_lines(after)))}
 <p>{html.escape(rca.test_summary)}</p>
 <h2>Code quality (ATC)</h2><p>{html.escape(atc_summary)}</p>
 <h2>Reviewer notes</h2><p>{html.escape(rca.risk_notes)}</p>

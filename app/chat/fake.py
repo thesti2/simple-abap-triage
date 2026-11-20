@@ -16,6 +16,7 @@ class FakeChatClient:
         self.posted: list[dict[str, Any]] = []
         self.replies: list[tuple[ThreadRef, str]] = []
         self.files: list[tuple[ThreadRef, str]] = []
+        self.uploaded: dict[str, Path] = {}  # title -> path of the last upload
         self._ts = itertools.count(1)
 
     def post_alert(self, alert: dict[str, Any]) -> ThreadRef:
@@ -29,3 +30,4 @@ class FakeChatClient:
 
     def upload_file(self, ref: ThreadRef, path: Path, title: str, comment: str = "") -> None:
         self.files.append((ref, title))
+        self.uploaded[title] = path

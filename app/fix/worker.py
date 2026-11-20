@@ -44,8 +44,9 @@ class FixWorker:
     def __init__(self, repo: Repository, adt: AdtGateway, llm: BaseChatModel, chat: ChatClient,
                  report_dir: Path = REPORT_DIR, abap_copy_dir: Path | None = ROOT / "ABAP",
                  activation_wait_s: float = 45, stale_retries: int = 3, max_attempts: int = 2,
-                 uat_sid: str = "") -> None:
+                 uat_sid: str = "", screens: Any = None) -> None:
         self.repo, self.adt, self.llm, self.chat = repo, adt, llm, chat
+        self.screens = screens  # WebGuiCapture (or any object with async capture_run); None -> text images
         self.uat_sid = uat_sid
         self.report_dir, self.abap_copy_dir = report_dir, abap_copy_dir
         self.activation_wait_s, self.stale_retries, self.max_attempts = activation_wait_s, stale_retries, max_attempts
@@ -84,6 +85,17 @@ class FixWorker:
             after = await self.reproduce(program, variant)
         return after
 
+    async def capture_screen(self, alert_id: str, program: str, variant: str, label: str) -> Path | None:
+        """Real SAP screenshot of a foreground run (optional evidence: a failure never fails the fix)."""
+        if self.screens is None:
+            return None
+        slug = alert_id.replace("/", "_")[-60:]
+        try:
+            return await self.screens.capture_run(program, variant, self.report_dir / f"{slug}_{label}_sap.png")
+        except Exception as e:  # noqa: BLE001
+            log.warning("SAP screenshot (%s) failed, using the text image: %s", label, e)
+            return None
+
     async def choose_transport(self, program: str, alert_id: str, previous: str | None = None) -> str:
         """Reuse the alert's fix TR on a retry; if the object is locked in a TR SAP forces that one;
         otherwise create a new TR."""
@@ -118,6 +130,7 @@ class FixWorker:
             before = await self.reproduce(program, variant)
             if before.ok:
                 raise RuntimeError(f"could not reproduce the error - `{program}` / `{variant}` finished normally")
+            before_screen = await self.capture_screen(alert_id, program, variant, "before")
 
             transport = await self.choose_transport(program, alert_id, previous=a.fix_tr)
             self.repo.update_fields(alert_id, fix_tr=transport)
@@ -149,12 +162,14 @@ class FixWorker:
                         f"Job log after your change: {after.joblog}\nDump: {after.dump}\n"
                         f"Re-read the source and correct your change (same rules). Original task:\n{task}")
                 session.activated = session.checked_clean = False
+            after_screen = await self.capture_screen(alert_id, program, variant, "after") if after.ok else None
             source_after = await self.adt.read_source(program)
             diff = unified_diff(program, source_before, source_after)
             atc = await self.adt.atc(program)
             atc_summary = str(atc.get("summaryInformation") or "no findings").replace("\n", "; ")
             rca = self.write_rca(a.to_dict(), before, after, diff, notes)
-            files = build_report(self.report_dir, a.to_dict(), before, after, diff, rca, transport, atc_summary, notes)
+            files = build_report(self.report_dir, a.to_dict(), before, after, diff, rca, transport, atc_summary, notes,
+                                 before_screen=before_screen, after_screen=after_screen)
             self._copy_source(program, source_after)
 
             if (ref := self._ref(a)) is not None:
@@ -237,12 +252,15 @@ def _build() -> FixWorker:
 
     from app.chat.slack import SlackChatClient
     from app.config import get_settings
+    from app.fix.webgui import capture_from_env
     from app.llm import get_llm
 
     s = get_settings()
     adt = AdtGateway(os.environ["SAP_ADT_MCP_URL"], os.environ["SAP_ADT_MCP_AUTH"], os.environ["SAP_ADT_DESTINATION"])
+    screens = capture_from_env()
+    log.info("SAP screenshots: %s", "WebGUI" if screens else "off (text images) - SAP_WEBGUI_* not set")
     return FixWorker(Repository(s.db_url), adt, get_llm(s), SlackChatClient(s.slack_bot_token, s.slack_channel_id),
-                     uat_sid=s.sap_uat_sid)
+                     uat_sid=s.sap_uat_sid, screens=screens)
 
 
 if __name__ == "__main__":
