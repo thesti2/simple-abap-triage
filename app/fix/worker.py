@@ -85,13 +85,18 @@ class FixWorker:
             after = await self.reproduce(program, variant)
         return after
 
-    async def capture_screen(self, alert_id: str, program: str, variant: str, label: str) -> Path | None:
-        """Real SAP screenshot of a foreground run (optional evidence: a failure never fails the fix)."""
+    async def capture_screen(self, alert_id: str, program: str, variant: str, label: str,
+                             runtime_error: str = "") -> Path | None:
+        """Real SAP screenshot (optional evidence: a failure never fails the fix). With a runtime error the dump is
+        shown from ST22 (WebGUI cannot display a dump when it happens); otherwise the foreground run's screen."""
         if self.screens is None:
             return None
         slug = alert_id.replace("/", "_")[-60:]
+        path = self.report_dir / f"{slug}_{label}_sap.png"
         try:
-            return await self.screens.capture_run(program, variant, self.report_dir / f"{slug}_{label}_sap.png")
+            if runtime_error:
+                return await self.screens.capture_dump(program, runtime_error, path)
+            return await self.screens.capture_run(program, variant, path)
         except Exception as e:  # noqa: BLE001
             log.warning("SAP screenshot (%s) failed, using the text image: %s", label, e)
             return None
@@ -130,7 +135,8 @@ class FixWorker:
             before = await self.reproduce(program, variant)
             if before.ok:
                 raise RuntimeError(f"could not reproduce the error - `{program}` / `{variant}` finished normally")
-            before_screen = await self.capture_screen(alert_id, program, variant, "before")
+            before_screen = await self.capture_screen(alert_id, program, variant, "before",
+                                                      runtime_error=before.dump.get("runtime_error") or "")
 
             transport = await self.choose_transport(program, alert_id, previous=a.fix_tr)
             self.repo.update_fields(alert_id, fix_tr=transport)

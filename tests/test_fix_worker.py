@@ -215,6 +215,9 @@ class _FakeScreens:
     def __init__(self, fail=False):
         self.calls, self.fail = [], fail
 
+    async def capture_dump(self, program, runtime_error, path):
+        return await self.capture_run(program, f"dump:{runtime_error}", path)
+
     async def capture_run(self, program, variant, path):
         self.calls.append((program, variant, path.name))
         if self.fail:
@@ -230,7 +233,9 @@ def test_worker_uses_real_sap_screenshots(repo, chat, fix_alert, tmp_path):
     w = _worker(repo, chat, FakeAdt(), _fix_script(), tmp_path)
     w.screens = screens
     assert asyncio.run(w.process(fix_alert)) == "FIX_READY"
-    assert [(p, v) for p, v, _ in screens.calls] == [("ZTRIAGE_DEMO_BUG", "ZBUG_DIV0")] * 2
+    # before: the dump from ST22 (WebGUI shows no dump screen); after: the foreground run of the variant
+    assert [(p, v) for p, v, _ in screens.calls] == [("ZTRIAGE_DEMO_BUG", "dump:COMPUTE_INT_ZERODIVIDE"),
+                                                     ("ZTRIAGE_DEMO_BUG", "ZBUG_DIV0")]
     uploaded = chat.uploaded
     assert str(uploaded["Before fix"]).endswith("_before_sap.png") and str(uploaded["After fix"]).endswith("_after_sap.png")
     html = next((tmp_path / "reports").glob("*_fix_report.html")).read_text(encoding="utf-8")
