@@ -141,12 +141,33 @@ resource "google_secret_manager_secret_version" "xmatters_token" {
   secret_data = random_password.xmatters_token.result
 }
 
+# Token the fix worker sends in the X-Worker-Token header (worker API over HTTPS, app/worker_api.py).
+# Read it with `terraform output -raw worker_api_token` into the worker's .env (WORKER_API_TOKEN).
+resource "random_password" "worker_token" {
+  length  = 40
+  special = false
+}
+
+resource "google_secret_manager_secret" "worker_token" {
+  secret_id = "${var.name_prefix}-worker-api-token"
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_secret_manager_secret_version" "worker_token" {
+  secret      = google_secret_manager_secret.worker_token.id
+  secret_data = random_password.worker_token.result
+}
+
 locals {
   all_secret_ids = merge(
     { for k, s in google_secret_manager_secret.manual : k => s.secret_id },
     {
       DB_PASSWORD            = google_secret_manager_secret.db_password.secret_id
       XMATTERS_WEBHOOK_TOKEN = google_secret_manager_secret.xmatters_token.secret_id
+      WORKER_API_TOKEN       = google_secret_manager_secret.worker_token.secret_id
     }
   )
 }

@@ -22,6 +22,8 @@ class Settings(BaseSettings):
 
     # xMatters -> backend webhook
     xmatters_webhook_token: str = ""
+    # fix worker -> backend worker API (header X-Worker-Token); empty = worker API closed
+    worker_api_token: str = ""
 
     # Database (SQLite locally, Cloud SQL Postgres in GCP).
     # DATABASE_URL wins if set (e.g. fix worker via Cloud SQL Auth Proxy:

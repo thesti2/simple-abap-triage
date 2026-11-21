@@ -20,3 +20,9 @@ output "xmatters_webhook_token" {
   value     = random_password.xmatters_token.result
   sensitive = true
 }
+
+output "worker_api_token" {
+  description = "Fix worker -> backend (header X-Worker-Token). Put into the worker's .env as WORKER_API_TOKEN."
+  value       = random_password.worker_token.result
+  sensitive   = true
+}

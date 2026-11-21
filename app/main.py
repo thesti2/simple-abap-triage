@@ -22,6 +22,7 @@ from app.db import AlertNotFound, Repository
 from app.pipeline.alert_graph import build_alert_graph
 from app.pipeline.classifier import Classifier, LLMClassifier, rule_based
 from app.schemas import AlertPayload
+from app.worker_api import router as worker_router
 
 log = logging.getLogger("abap_triage")
 
@@ -118,6 +119,8 @@ def create_app(services: Services | None = None, start_socket_mode: bool = True)
 
         return await SlackRequestHandler(svc.slack_app).handle(request)
 
+    # fix worker -> alert store over HTTPS (app/worker_api.py)
+    app.include_router(worker_router)
     return app
 
 

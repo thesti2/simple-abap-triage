@@ -87,7 +87,7 @@ flowchart LR
     SM -.-> CR
     CR <-- "Web API / events" --> SLACK
     CR --> LLM
-    FW <-- "Cloud SQL Auth Proxy" --> SQL
+    FW <-- "HTTPS worker API (443)" --> CR
     FW --> SLACK
     FW --> LLM
     FW --> MCP

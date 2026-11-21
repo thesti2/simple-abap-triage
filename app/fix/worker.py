@@ -259,7 +259,15 @@ def _build() -> FixWorker:
     adt = AdtGateway(os.environ["SAP_ADT_MCP_URL"], os.environ["SAP_ADT_MCP_AUTH"], os.environ["SAP_ADT_DESTINATION"])
     screens = capture_from_env()
     log.info("SAP screenshots: %s", "WebGUI" if screens else "off (text images) - SAP_WEBGUI_* not set")
-    return FixWorker(Repository(s.db_url), adt, get_llm(s), SlackChatClient(s.slack_bot_token, s.slack_channel_id),
+    if api_url := os.environ.get("TRIAGE_API_URL", "").strip():
+        from app.worker_api import RemoteRepository
+
+        repo: Any = RemoteRepository(api_url, os.environ["WORKER_API_TOKEN"])
+        log.info("alert store: worker API %s", api_url)
+    else:
+        repo = Repository(s.db_url)
+        log.info("alert store: database (%s)", s.db_url.split(":", 1)[0])
+    return FixWorker(repo, adt, get_llm(s), SlackChatClient(s.slack_bot_token, s.slack_channel_id),
                      uat_sid=s.sap_uat_sid, screens=screens)
 
 
