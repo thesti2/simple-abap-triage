@@ -29,7 +29,7 @@
           │                                             │ Cloud SQL Postgres (alerts, status)   │            │            │
           │                                             │ LangSmith tracing                     │            │            │
           │                                             └──────────────────▲───────────────────┘            │            │
-          │ ADT (HTTP)                                                     │ Cloud SQL Auth Proxy           │            │
+          │ ADT (HTTP)                                                     │ Worker API (HTTPS 443)         │            │
           │                                  Local workstation ┌───────────┴──────────────────┐  Web API   │ RCA + test │
           └──────────────────────── SAP ADT MCP ◀──────────────│ Fix worker: fix sub-agent    │──────────▶│ document   │
                                                                │ (create_agent + ADT MCP),    │            └────────────┘
@@ -77,7 +77,7 @@ app/
   chat/slack.py            # Slack implementation (slack_bolt + slack_sdk, Block Kit)
   chat/fake.py             # in-memory client for tests / local runs
   reports/test_doc.py      # builds RCA + before/after test document
-worker/                    # local fix worker (runs on the workstation with sap-adt MCP, polls Cloud SQL)
+worker/                    # local fix worker (runs on the workstation with sap-adt MCP, polls the worker API)
 infra/terraform/           # ALL GCP services/resources (AGENTS.md UPDATE 1)
 tests/
 docs/ (xmatters-contract.md, slack-setup.md, slack-app-manifest.yaml, runbook.md)
@@ -87,7 +87,7 @@ docs/ (xmatters-contract.md, slack-setup.md, slack-app-manifest.yaml, runbook.md
 
 ## 2. Phase 0 – Foundations (prerequisites)
 
-*Status checked 2026-11-18.*
+*Status checked 2026-11-18, updated 2026-11-21.*
 
 - [x] SAP ADT MCP connection to DEV works for reads – destination `<ADT_DESTINATION>` logged on, repository search OK.
 - [x] SAP ADT MCP write works (create/activate) – verified in Phase 1. Code execution only via ABAP Unit.
@@ -95,13 +95,15 @@ docs/ (xmatters-contract.md, slack-setup.md, slack-app-manifest.yaml, runbook.md
 - [x] Workbench TR **<PHASE1_TR>** in `<SAP_PACKAGE>` created for Phase 1 objects.
 - [x] SM59 destination `ZTRIAGE_XMATTERS` maintained (per user).
 - [x] GCP project `<GCP_PROJECT_ID>` (asia-southeast1), gcloud logged in, Terraform written in `infra/terraform` and validated.
-- [ ] **Billing enabled on `<GCP_PROJECT_ID>`** (currently disabled – blocks all resource creation).
-- [ ] `terraform apply` (Cloud SQL, Secret Manager, Artifact Registry, Cloud Run).
+- [x] **Billing enabled on `<GCP_PROJECT_ID>`**.
+- [x] `terraform apply` (Cloud SQL, Secret Manager, Artifact Registry, Cloud Run) – 2026-11-21; state in the versioned
+      state bucket; `terraform plan` shows no changes afterwards.
 - [x] LangSmith API key + project set in `.env` (`LANGSMITH_*`) – not yet validated with a trace.
 - [x] `.env` has `OPENROUTER_API_KEY` and `MODEL`; `.env` is git-ignored.
 - [x] OpenRouter smoke test (`scripts/smoke_openrouter.py`): plain, tool calling and structured output OK.
       `json_schema` mode classified correctly where `function_calling` did not → default `json_schema`.
 - [x] Network path to SAP: resolved by running the fix worker locally with the `sap-adt` MCP (see Risk 3) – no VPC/VPN needed.
+      The worker reaches the backend over HTTPS (worker API); the Cloud SQL Auth Proxy port 3307 is blocked by the corporate network.
 
 **Success:** ADT read works from this workstation; GCP project exists; `terraform plan` is clean after apply
 (no drift); no GCP service or resource created by hand except the state bucket and secret values.
@@ -159,8 +161,9 @@ TMS/Basis process. Needs `S_TRANSPRT` authorization for release (standard develo
       test seam, separate INDX key; nothing reaches xMatters). Re-observe once the job is scheduled in SM36.
 - [x] Failure to reach xMatters is logged and retried next run – unit test `ltc_dedup->failed_send_is_retried` (wrong
       destination name → send result not OK with message, job not marked sent, sent again on the next run).
-- [ ] *(Deferred)* `Z_TRIAGE_TR_RELEASE` releases a real TR – tested in Phase 3.5 instead of a dummy TR.
-- [ ] *(Deferred)* Job `ZTRIAGE_JOB_MONITOR` scheduled in SM36 every 5 minutes – after the xMatters flow to the backend is ready.
+- [x] `Z_TRIAGE_TR_RELEASE` releases a real TR – tested in Phase 3.5 (2026-11-19 locally, 2026-11-21 via GCP).
+- [ ] Job `ZTRIAGE_JOB_MONITOR` scheduled in SM36 every 5 minutes (ideally under a batch user) – the xMatters flow to the
+      backend is ready; until then the monitor is started manually (E2E test 2026-11-21: foreground run via WebGUI).
 
 ---
 
@@ -175,35 +178,35 @@ Slack app settings have no Terraform provider in scope, so they are created **on
 The two Slack secrets are stored in Secret Manager (containers created by **Terraform**, values added by hand).
 
 **User (manual, ~10 min):**
-- [ ] 1. Slack workspace (existing, or a new free one) where you can install apps.
-- [ ] 2. api.slack.com/apps → *Create New App* → *From a manifest* → paste `docs/slack-app-manifest.yaml`.
-- [ ] 3. *Install to Workspace*; copy **Bot User OAuth Token** (`xoxb-…`) and **Signing Secret** (Basic Information) into `.env`
+- [x] 1. Slack workspace (existing, or a new free one) where you can install apps.
+- [x] 2. api.slack.com/apps → *Create New App* → *From a manifest* → paste `docs/slack-app-manifest.yaml`.
+- [x] 3. *Install to Workspace*; copy **Bot User OAuth Token** (`xoxb-…`) and **Signing Secret** (Basic Information) into `.env`
        (`SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`).
-- [ ] 4. Create the triage channel (e.g. private `#abap-triage`), `/invite` the bot; copy the **channel ID** (`C…`) into `.env` (`SLACK_CHANNEL_ID`).
-- [ ] 5. *(Optional, local dev before Cloud Run exists)* App-level token with `connections:write` (`xapp-…`) → `.env` `SLACK_APP_TOKEN`
+- [x] 4. Create the triage channel (e.g. private `#abap-triage`), `/invite` the bot; copy the **channel ID** (`C…`) into `.env` (`SLACK_CHANNEL_ID`).
+- [x] 5. *(Optional, local dev before Cloud Run exists)* App-level token with `connections:write` (`xapp-…`) → `.env` `SLACK_APP_TOKEN`
        to run in **Socket Mode** (no public URL needed).
-- [ ] 6. After `terraform apply`: set Event Subscriptions + Interactivity Request URLs to the Cloud Run URL (manifest placeholders), Slack verifies them.
+- [x] 6. After `terraform apply`: set Event Subscriptions + Interactivity Request URLs to the Cloud Run URL (manifest placeholders), Slack verifies them.
 
 **Me (code + Terraform):**
-- [ ] 7. **Terraform:** Secret Manager secrets `slack-bot-token`, `slack-signing-secret` + Cloud Run env `SLACK_CHANNEL_ID`.
-- [ ] 8. `ChatClient` interface + `SlackChatClient` (`chat.postMessage` with Block Kit; replies with `thread_ts`;
+- [x] 7. **Terraform:** Secret Manager secrets `slack-bot-token`, `slack-signing-secret` + Cloud Run env `SLACK_CHANNEL_ID`.
+- [x] 8. `ChatClient` interface + `SlackChatClient` (`chat.postMessage` with Block Kit; replies with `thread_ts`;
        file upload via `files.getUploadURLExternal` / `files.completeUploadExternal`) + `FakeChatClient` for tests.
-- [ ] 9. One **thread per alert**: parent message = alert card (category, RCA, recommendation, buttons
+- [x] 9. One **thread per alert**: parent message = alert card (category, RCA, recommendation, buttons
        `Fix it` / `Approve` / `Reject`); store `channel` + `ts` on the alert → thread ↔ `alert_id` mapping.
-- [ ] 10. `POST /slack/events`: `app_mention` and thread `message` events → chat agent; ignore bot's own messages; dedupe `event_id` (Slack retries).
-- [ ] 11. `POST /slack/interactions`: button clicks (`block_actions`) carry `alert_id` → status transitions; ack < 3 s, work async.
+- [x] 10. `POST /slack/events`: `app_mention` and thread `message` events → chat agent; ignore bot's own messages; dedupe `event_id` (Slack retries).
+- [x] 11. `POST /slack/interactions`: button clicks (`block_actions`) carry `alert_id` → status transitions; ack < 3 s, work async.
 
 ### Phase 2 success checklist
-*Status 2026-11-18: local end-to-end in Socket Mode passed. HTTP-mode items are re-checked after the Cloud Run deploy.*
+*Status 2026-11-18: local end-to-end in Socket Mode passed. 2026-11-21: re-checked in HTTP mode on Cloud Run (Socket Mode off).*
 - [x] Requests with a wrong signature or a timestamp older than 5 min are rejected (401) – unit test, HTTP mode.
 - [x] Slack Request URL verification (`url_verification` challenge) succeeds – unit test, HTTP mode.
 - [x] Bot token valid (`auth.test` OK).
 - [x] Backend posts an alert card to the channel (`python -m app.chat.slack --test` + 3 real cards from the pipeline).
 - [x] Reply with `thread_ts` lands in the same thread; mentioning the bot in that thread reaches the backend with the right `alert_id`.
-- [x] Button click (*Fix it*) reaches the backend with the `alert_id` → `FIX_REQUESTED`, actor = Slack user, reply in thread (Socket Mode; `/slack/interactions` in HTTP mode after deploy).
+- [x] Button click (*Fix it*) reaches the backend with the `alert_id` → `FIX_REQUESTED`, actor = Slack user, reply in thread (Socket Mode 2026-11-18; HTTP mode via `/slack/interactions` on Cloud Run 2026-11-21).
 - [x] Slack retry of the same event (`X-Slack-Retry-Num`) is processed only once – Bolt middleware acks and drops retries
       (unit test, HTTP mode).
-- [ ] File upload (test document) appears in the alert thread.
+- [x] File upload (test document + before/after screenshots) appears in the alert thread (2026-11-19 local, 2026-11-21 via GCP).
 
 ---
 
@@ -229,14 +232,16 @@ thread id = `channel:thread_ts`). Triggered by mentioning the bot in an alert th
 The same actions are available as buttons on the alert card (`Fix it`, `Approve`, `Reject`).
 
 ### 3.4 Fix sub-agent (SAP ADT)
-Runs in the **local fix worker** (picks up `FIX_REQUESTED` from Cloud SQL); status `FIX_IN_PROGRESS`.
+Runs in the **local fix worker** (picks up `FIX_REQUESTED` through the backend's worker API over HTTPS); status `FIX_IN_PROGRESS`.
 1. Reproduce **before**: run `ZCL_TRIAGE_RUNNER->run_job( program, variant )` through an ABAP Unit test method
    (only way to execute code via ADT) → capture status, dump, job log, spool.
 2. Read source (`abap_object_read_file`), locate faulty line, create/assign TR (`abap_transport_create_request`).
 3. Edit (`abap_object_edit_file`), syntax check (`abap_object_check`), activate (`abap_object_activate`), ATC (`abap_atc_run_*`).
 4. Reproduce **after** with the same variant → must succeed.
 5. Produce **test document** (Markdown → PDF/HTML) containing: alert summary, RCA, code diff (`abap_transport_get_unified_diff`),
-   before/after outputs rendered as images ("screenshots"), ATC result, TR number.
+   before/after **real SAP screenshots** via SAP GUI for HTML (WebGUI) + headless Chromium: *before* = the short dump in
+   ST22 (long text + source extract at the `>>>>>` line), *after* = the program's result screen; text-rendered images as
+   fallback when WebGUI is not configured or fails. Plus ATC result and TR number.
 6. Upload the test document (PDF/HTML) **directly into the alert's Slack thread** (no GCS bucket needed) with RCA +
    summary of the change; status `FIX_READY`; copy changed source to `ABAP/`.
 Guardrails: only objects in allowed packages (`Z*`/`ZTRIAGE`), max N edit iterations, never release TR itself.
@@ -285,17 +290,25 @@ The import into `<UAT_SID>` is **not** done by the agent; it follows the normal 
 - [ ] If release fails (e.g. object locked, ATC block), status stays `APPROVED` and the error is posted to the thread.
 - [x] Release messages in the chat name only the root TR, not its tasks (AGENTS.md *Improvements* 1; unit tests).
 - [ ] Every step visible as a trace in LangSmith; every status change in `alert_events`.
-- [ ] Any GCP resource added in Phase 3 is in Terraform; `terraform plan` shows no changes after apply.
+- [x] Any GCP resource added in Phase 3 is in Terraform; `terraform plan` shows no changes after apply (2026-11-21, also after pause).
 - [x] Local end-to-end (2026-11-19): alert via webhook → Slack card → *Fix it* → fix in DEV → test document → *Approve* →
       TR released, no manual step other than the Slack actions.
 - [x] Code ready for GCP (2026-11-20): `Dockerfile` (built by Cloud Build), Postgres via `psycopg` (URL from
       `DB_SOCKET`/`DB_NAME`/`DB_USER`/`DB_PASSWORD` or `DATABASE_URL`), Postgres chat-memory checkpointer, Slack HTTP mode
       (`SLACK_MODE=http` in Terraform). Checked locally against a real (embedded) Postgres: tables, duplicate check,
       history, chat memory across restarts; production wiring in HTTP mode (signature check, `/health`, 401 webhook).
-- [ ] GCP deploy: `terraform plan` → OK → `apply`, secret values, image build + deploy, Slack Request URLs, Socket Mode off,
-      xMatters HTTP step (see `infra/terraform/README.md`).
-- [ ] **Full end-to-end test** (after GCP deploy): schedule `ZBUG_DIV0` job → monitor → xMatters → Cloud Run → Slack card →
-      fix → approve → TR released. Needs: SM36 schedule, xMatters flow to the webhook, demo bug re-introduced.
+- [x] GCP deploy (2026-11-21): `terraform plan` → OK → `apply`, secret values, image build (Cloud Build) + deploy, Slack
+      Request URLs, Socket Mode off, xMatters flow step "Send to ABAP Triage" (see `infra/terraform/README.md`).
+- [x] Worker API (2026-11-21): fix worker ↔ backend over HTTPS with `X-Worker-Token` (port 3307 for the Cloud SQL Auth
+      Proxy is blocked); worker may only set fix/release statuses and `fix_tr` (tests incl. a full fix run over the API).
+- [x] Pause/resume (2026-11-21): `paused = true` stops Cloud SQL and scales Cloud Run to 0; the backend starts without the
+      database and answers `503` (fixes a failed pause where the new revision could not start).
+- [x] Real SAP screenshots via WebGUI (2026-11-21): after = list output of the variant run; before = ST22 dump long text +
+      source extract (WebGUI shows no dump screen when it happens). Tested directly; not yet inside a full fix run.
+- [x] **Full end-to-end test** (2026-11-21, via GCP): demo bug re-introduced (new TR) → real cancelled `ZBUG_DIV0` job →
+      monitor (started manually via WebGUI, not yet SM36) → xMatters `202` → Cloud Run `202` → LLM triage → Slack card
+      (~4 s) → *Fix it* → worker on the workstation via the worker API → fix + test document → *Approve* → TR released,
+      alert `RELEASED`. Open: the *before* screenshot showed the selection screen (fixed afterwards with ST22, see above).
 
 ---
 
@@ -303,14 +316,16 @@ The import into `<UAT_SID>` is **not** done by the agent; it follows the normal 
 
 1. **TR release** – the ADT MCP tools have **no release tool**, so this goes through the RFC wrapper in 1.4.
    The local fix worker calls it via `pyrfc` or an SAP HTTP wrapper (same workstation as the `sap-adt` MCP, Risk 3).
-2. **Screenshots** – a cloud agent can't take SAP GUI screenshots. MVP: render before/after program output and dump text as images in the test doc.
-   Real GUI screenshots (SAP GUI scripting / Playwright on Fiori) = later phase.
+2. **Screenshots** – **resolved (2026-11-21):** real screens via SAP GUI for HTML (WebGUI) + Playwright, wherever the
+   worker can reach WebGUI (password logon with `saml2=disabled`, since SSO via IAS/Okta can't be automated).
 3. **Network GCP → SAP DEV** – the fix sub-agent needs ADT access to on-prem SAP (VPN / Interconnect / SAP Cloud Connector / a VM in the corporate network).
    **Decision:** the fix worker (fix sub-agent + TR release) runs on the workstation that has the `sap-adt` MCP.
-   It polls Cloud SQL (via Cloud SQL Auth Proxy) for `FIX_REQUESTED` / `APPROVED` alerts and posts results to Slack itself.
+   It polls the backend's worker API over HTTPS for `FIX_REQUESTED` / `APPROVED` alerts (the Cloud SQL Auth Proxy port
+   3307 is blocked by the corporate network) and posts results to Slack itself.
    Cloud Run only hosts the webhooks, alert pipeline and chat agent.
 4. **SAP → xMatters outbound** – needs firewall/proxy opening and SSL certificate in STRUST.
-5. **Cloud Run background work** – use min-instances = 1 + "CPU always allocated", or Cloud Tasks for the fix job (fix runs can take minutes).
+5. **Cloud Run background work** – done: min-instances = 1 + "CPU always allocated" while running (the fix job runs in
+   the worker, not in Cloud Run).
 6. **Safety** – agent restricted to DEV, allowed packages, and never releases without a recorded human approval.
 
 ## 7. Decisions (confirmed 2026-11-18)

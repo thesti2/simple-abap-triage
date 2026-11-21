@@ -139,7 +139,7 @@ Every transition is validated in code and logged with actor and timestamp (`aler
 | Observability | **LangSmith** | Traces of pipeline, chat agent and fix agent runs |
 | Cloud | **Google Cloud**: Cloud Run, Cloud SQL, Secret Manager, Artifact Registry | Hosting the backend |
 | Infrastructure as code | **Terraform** | All GCP resources (with a `paused` toggle to save cost) |
-| Reports | Pillow, HTML | Test document and before/after "screenshots" of the job output |
+| Reports | Playwright (SAP GUI for HTML), Pillow, HTML | Test document with real SAP screenshots: before = dump in ST22, after = result screen (text images as fallback) |
 | Tooling | `uv`, pytest | Dependencies, unit and live tests |
 
 ### Design choices
@@ -197,11 +197,12 @@ More: [`docs/runbook.md`](docs/runbook.md) (local operation), [`infra/terraform/
 | Phase | Content | Status |
 |---|---|---|
 | 1 | SAP: demo program, job monitor → xMatters, runner, TR release | done (alerts received in xMatters; dedup + retry unit-tested) |
-| 2 | Slack integration (cards, threads, buttons, Socket Mode) | done locally; HTTP mode after deploy |
+| 2 | Slack integration (cards, threads, buttons) | done (Socket Mode locally, HTTP mode on Cloud Run) |
 | 3.1–3.2 | Alert pipeline + classification | done (eval: 13/13 alerts correctly classified, target ≥ 90 %) |
 | 3.3 | Chat agent in Slack threads | done |
 | 3.4 | Fix agent with test document | done (live fix in DEV: before dump, after finished) |
 | 3.5 | Approval + TR release | done (fix TR released after approval in Slack) |
-| – | Deploy to GCP (Terraform + Cloud Run) | code + infrastructure ready (Dockerfile, Postgres, Slack HTTP mode); not applied |
+| – | Deploy to GCP (Terraform + Cloud Run) | done; full end-to-end test SAP → xMatters → Cloud Run → Slack → fix → TR release passed (2026-11-21); pause/resume via `paused` |
+| – | Open | SM36 schedule of the job monitor; LangSmith trace check; release-failure path live; ST22 screenshot inside a full fix run |
 
 Details and checklists: [`PLAN.md`](PLAN.md).
