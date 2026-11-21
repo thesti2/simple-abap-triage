@@ -361,3 +361,33 @@ def test_worker_refuses_standard_program(repo, chat, fix_alert, tmp_path):
     repo.update_fields(fix_alert, program="SAPMV45A")
     status = asyncio.run(_worker(repo, chat, FakeAdt(), _fix_script(), tmp_path).process(fix_alert))
     assert status == "FIX_FAILED" and "not a custom" in chat.replies[-1][1]
+
+
+# ---------------------------------------------------------------- repo copy without private system ids
+def test_mask_system_ids():
+    from app.fix.worker import mask_system_ids
+
+    src = '" Triage alert ABC-300-ZJOB-123: fix\n" see ABC-200-ZJOB-9 too\nDATA abc TYPE i. " ABC-DEF stays\n'
+    out = mask_system_ids(src, "ABC", "300")
+    assert "XYZ-100-ZJOB-123" in out and "XYZ-200-ZJOB-9" in out and "ABC-DEF stays" in out and "ABC-" not in out.split("ABC-DEF")[0]
+    assert mask_system_ids(src, "", "") == src
+
+
+def test_worker_copy_masks_real_system(repo, chat, fix_alert, tmp_path):
+    copy_dir = tmp_path / "ABAP"
+    copy_dir.mkdir()
+    (copy_dir / "ztriage_demo_bug.prog.abap").write_text("old\n", encoding="utf-8")
+    p = repo.get(fix_alert).payload | {"system": "ABC", "client": "300"}
+    repo.update_fields(fix_alert, payload=p, system="ABC")
+    script = _fix_script()
+    adt = FakeAdt()
+    w = FixWorker(repo, adt, script, chat, report_dir=tmp_path / "reports", abap_copy_dir=copy_dir,
+                  activation_wait_s=0, stale_retries=1, max_attempts=1)
+    original_read = adt.read_source
+
+    async def read_with_comment(name):
+        return (await original_read(name)).replace("  lv_unit_price", f'  " Triage alert ABC-300-JOB-1: fix\n  lv_unit_price', 1)
+    adt.read_source = read_with_comment
+    assert asyncio.run(w.process(fix_alert)) == "FIX_READY"
+    copied = (copy_dir / "ztriage_demo_bug.prog.abap").read_text(encoding="utf-8")
+    assert "XYZ-100-JOB-1" in copied and "ABC-300" not in copied

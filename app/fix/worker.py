@@ -35,6 +35,16 @@ REPORT_DIR = ROOT / "reports"
 _TR_RE = re.compile(r"\b[A-Z0-9]{3}K\d{6}\b")
 
 
+def mask_system_ids(text: str, system: str, client: str) -> str:
+    """Replace the real system id / client in alert ids (`<SID>-<client>-<job>-<count>`, e.g. in comments the fix
+    agent writes) with the repo placeholders (`XYZ-100-...`). SAP keeps the real text; only the repo copy is masked."""
+    if not system:
+        return text
+    if client:
+        text = re.sub(rf"\b{re.escape(system)}-{re.escape(client)}-", "XYZ-100-", text)
+    return re.sub(rf"\b{re.escape(system)}-(?=\d{{3}}-)", "XYZ-", text)  # same system, other client
+
+
 def root_tr_messages(messages: list[str], root_tr: str) -> list[str]:
     """Release messages for the chat: drop those naming another TR (the request's tasks), keep the rest."""
     return [m for m in messages if all(tr == root_tr for tr in _TR_RE.findall(m))]
@@ -176,7 +186,7 @@ class FixWorker:
             rca = self.write_rca(a.to_dict(), before, after, diff, notes)
             files = build_report(self.report_dir, a.to_dict(), before, after, diff, rca, transport, atc_summary, notes,
                                  before_screen=before_screen, after_screen=after_screen)
-            self._copy_source(program, source_after)
+            self._copy_source(program, source_after, p.get("system") or a.system or "", p.get("client") or "")
 
             if (ref := self._ref(a)) is not None:
                 for f, title in ((files.before_png, "Before fix"), (files.after_png, "After fix"),
@@ -230,11 +240,12 @@ class FixWorker:
         self._say(a, f":rocket: TR `{a.fix_tr}` released (approved by {approver}) - ready for import{uat}.")
         return Status.RELEASED
 
-    def _copy_source(self, program: str, source: str) -> None:
+    def _copy_source(self, program: str, source: str, system: str = "", client: str = "") -> None:
         if self.abap_copy_dir is None:
             return
         target = self.abap_copy_dir / f"{program.lower()}.prog.abap"
         if target.exists():  # only keep copies of objects we track in the repo
+            source = mask_system_ids(source, system, client)  # the repo copy must not name the real system
             target.write_text(source if source.endswith("\n") else source + "\n", encoding="utf-8")
 
     async def run_forever(self, interval_s: int = 15) -> None:
