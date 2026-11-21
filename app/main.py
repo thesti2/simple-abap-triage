@@ -8,6 +8,8 @@ from __future__ import annotations
 import logging
 import secrets
 import threading
+import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -64,14 +66,48 @@ def default_services(settings: Settings) -> Services:
     return Services(settings, repo, classifier, chat, build_alert_graph(repo, classifier, chat), slack_app)
 
 
+class ServiceHolder:
+    """Builds the services (DB, Slack, LLM) once. If that fails (database stopped while GCP is paused, Cloud SQL
+    still starting) the app still starts; requests get 503 and the build is retried at most every `retry_s`."""
+
+    def __init__(self, factory: Callable[[], Services], retry_s: float = 30) -> None:
+        self.factory, self.retry_s = factory, retry_s
+        self.svc: Services | None = None
+        self._lock = threading.Lock()
+        self._next_try = 0.0
+
+    def try_get(self) -> Services | None:
+        try:
+            return self.get()
+        except HTTPException:
+            return None
+
+    def get(self) -> Services:
+        if self.svc is not None:
+            return self.svc
+        with self._lock:
+            if self.svc is None:
+                if time.monotonic() < self._next_try:
+                    raise HTTPException(status_code=503, detail="backend not ready (database unavailable)")
+                try:
+                    self.svc = self.factory()
+                except Exception as e:  # noqa: BLE001
+                    self._next_try = time.monotonic() + self.retry_s
+                    log.error("services not available (database down or GCP paused?): %s", e)
+                    raise HTTPException(status_code=503, detail="backend not ready (database unavailable)") from None
+        return self.svc
+
+
 def create_app(services: Services | None = None, start_socket_mode: bool = True) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        svc = services or default_services(get_settings())
-        app.state.svc = svc
+        holder = ServiceHolder(lambda: services or default_services(get_settings()))
+        app.state.services = holder
         handler = None
-        s = svc.settings
-        if start_socket_mode and svc.slack_app is not None and s.slack_mode == "socket" and s.slack_app_token:
+        svc = holder.try_get()  # database down (e.g. GCP paused) -> start anyway, requests get 503 + retry later
+        s = svc.settings if svc else None
+        if (start_socket_mode and svc is not None and svc.slack_app is not None and s.slack_mode == "socket"
+                and s.slack_app_token):
             from slack_bolt.adapter.socket_mode import SocketModeHandler
 
             handler = SocketModeHandler(svc.slack_app, s.slack_app_token)
@@ -94,7 +130,7 @@ def create_app(services: Services | None = None, start_socket_mode: bool = True)
         request: Request,
         x_triage_token: str | None = Header(default=None),
     ) -> Any:
-        svc: Services = request.app.state.svc
+        svc = request.app.state.services.get()
         expected = svc.settings.xmatters_webhook_token
         # fail closed: no configured token -> nobody gets in
         if not expected or not x_triage_token or not secrets.compare_digest(x_triage_token, expected):
@@ -112,7 +148,7 @@ def create_app(services: Services | None = None, start_socket_mode: bool = True)
     @app.post("/slack/interactions")
     async def slack_http(request: Request) -> Any:
         """HTTP mode (Cloud Run). In Socket Mode these endpoints are not used."""
-        svc: Services = request.app.state.svc
+        svc = request.app.state.services.get()
         if svc.slack_app is None or svc.settings.slack_mode != "http":
             raise HTTPException(status_code=404, detail="Slack HTTP mode not enabled")
         from slack_bolt.adapter.fastapi import SlackRequestHandler

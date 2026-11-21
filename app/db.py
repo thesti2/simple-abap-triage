@@ -86,7 +86,8 @@ class Repository:
         if database_url.startswith("sqlite"):
             kwargs["connect_args"] = {"check_same_thread": False}
         else:  # Cloud SQL: drop dead connections (idle timeouts, instance restarts) instead of failing a request
-            kwargs.update(pool_pre_ping=True, pool_recycle=1800, pool_size=5, max_overflow=5)
+            kwargs.update(pool_pre_ping=True, pool_recycle=1800, pool_size=5, max_overflow=5,
+                          connect_args={"connect_timeout": 10})  # stopped instance: fail fast, don't hang startup
         self.engine = create_engine(database_url, **kwargs)
         self._session = sessionmaker(self.engine, expire_on_commit=False)
         Base.metadata.create_all(self.engine)

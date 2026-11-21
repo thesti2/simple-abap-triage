@@ -68,7 +68,10 @@ terraform apply      # Cloud SQL stopped (only 10 GB storage billed), Cloud Run 
 # terraform.tfvars: paused = false
 terraform apply      # Cloud SQL starts (a few minutes), one always-on Cloud Run instance again
 ```
-While paused, alerts from xMatters fail (database stopped) and the Slack bot does not answer.
+While paused, alerts from xMatters fail (database stopped) and the Slack bot does not answer: the service still
+starts and answers `503 backend not ready` (it retries the database every 30 s). Stop the fix worker before pausing.
+The Cloud Run container no longer needs the database to start, so the order in which Terraform changes Cloud SQL and
+Cloud Run does not matter (images before `v3` failed to start with the database stopped).
 
 ## Destroy (done with the project)
 Everything Terraform created is deleted, including **all alert data** (export first if needed).

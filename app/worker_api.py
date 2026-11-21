@@ -29,7 +29,7 @@ WORKER_FIELDS = {"fix_tr"}
 
 # ---------------------------------------------------------------- server
 def _check_token(request: Request, x_worker_token: str | None = Header(default=None)) -> None:
-    expected = request.app.state.svc.settings.worker_api_token
+    expected = request.app.state.services.get().settings.worker_api_token
     if not expected or not x_worker_token or not secrets.compare_digest(x_worker_token, expected):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid worker token")
 
@@ -48,7 +48,7 @@ class TransitionBody(BaseModel):
 
 
 def _repo(request: Request):
-    return request.app.state.svc.repo
+    return request.app.state.services.get().repo
 
 
 def _out(alert) -> dict[str, Any]:

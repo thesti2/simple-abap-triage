@@ -51,7 +51,7 @@ CLASS lcl_demo IMPLEMENTATION.
   METHOD calc_unit_price.
     DATA lv_unit_price TYPE i.
     WRITE: / 'Total amount:', p_total, / 'Quantity    :', p_qty.
-    " Alert XYZ-100-ZTRIAGE_TEST_DIV0-22245801: skip division for zero quantity.
+    " Triage alert XYZ-100-ZTRIAGE_TEST_DIV0-11421700: avoid division by zero
     IF p_qty = 0.
       MESSAGE 'Quantity must not be zero; unit price was not calculated.' TYPE 'S' DISPLAY LIKE 'W'.
       RETURN.
